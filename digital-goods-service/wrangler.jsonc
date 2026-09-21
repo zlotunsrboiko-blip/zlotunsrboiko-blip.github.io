@@ -1,0 +1,8 @@
+{
+  "name": "digital-goods-service",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
+  "vars": {"YANDEX_BUSINESS_ID": "216918278", "YANDEX_CAMPAIGN_ID": "149189839"},
+  "observability": {"enabled": false}
+}
