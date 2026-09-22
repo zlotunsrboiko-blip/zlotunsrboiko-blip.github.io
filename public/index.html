@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#ffcf32"><title>Цифровые заказы</title><link rel="stylesheet" href="./styles.css"><script src="./connection.js" defer></script><script src="./app.js" defer></script></head>
+<body>
+  <div id="demo-banner" class="demo-banner" hidden>Демонстрация · вымышленные заказы · отправки не уходят в Маркет</div>
+  <header class="topbar"><a class="brand" href="./" aria-label="Цифровые заказы — главная"><span class="brand-icon">Ц</span><span>Цифровые заказы<small>Яндекс Маркет · DBS</small></span></a><div class="account"><span id="account-label"></span><button id="logout" class="button quiet" hidden>Выйти</button></div></header>
+  <main>
+    <section id="login" class="login card">
+      <p class="eyebrow">ВАШ РАБОЧИЙ КАБИНЕТ</p><h1>Заказы под рукой</h1><p class="muted">Отправляйте цифровые товары, смотрите историю и отвечайте покупателям.</p>
+      <form id="login-form">
+        <label>API-ключ Маркета<input id="api-key" type="password" required autocomplete="off" spellcheck="false" placeholder="Вставьте ключ из кабинета продавца"></label>
+        <div class="two-fields"><label>ID кабинета<input id="business-id" inputmode="numeric" pattern="[0-9]+" required></label><label>ID магазина<input id="campaign-id" inputmode="numeric" pattern="[0-9]+" required></label></div>
+        <label id="password-field" hidden>Пароль сервиса<input id="app-password" type="password" autocomplete="current-password"></label>
+        <p class="hint">Ключ хранится только в памяти открытой страницы. При обновлении страницы его нужно ввести снова.</p>
+        <p id="login-error" class="error-text" role="alert"></p><button class="button primary wide" id="login-button">Открыть заказы</button>
+      </form>
+    </section>
+    <div id="workspace" hidden>
+      <nav class="tabs" aria-label="Разделы"><button data-tab="orders" class="tab active" aria-current="page">К отправке</button><button data-tab="history" class="tab">История</button><button data-tab="chats" class="tab">Переписка</button></nav>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section id="orders-panel" class="panel">
+        <div class="page-head"><div><p class="eyebrow">ОТПРАВКА ЦИФРОВЫХ ТОВАРОВ</p><h1>Ждут ваши ключи</h1><p class="muted">Выберите заказ, вставьте данные и инструкцию.</p></div><button id="refresh-orders" class="button">Обновить</button></div>
+        <div class="toolbar"><label class="check"><input id="test-orders" type="checkbox"> Тестовые заказы</label><span id="orders-count" class="muted"></span></div>
+        <div id="orders" class="order-list" aria-live="polite"></div><button id="more-orders" class="button more" hidden>Загрузить ещё заказы</button>
+      </section>
+      <section id="history-panel" class="panel" hidden>
+        <div class="page-head"><div><p class="eyebrow">ДАННЫЕ ИЗ МАРКЕТА</p><h1>История заказов</h1><p class="muted">Состав, суммы и актуальные статусы ваших цифровых заказов.</p></div></div>
+        <form id="history-filter" class="filters card"><label>С даты<input type="date" id="history-from" required></label><label>По дату<input type="date" id="history-to" required></label><label>Статус<select id="history-status"><option value="">Все статусы</option value="DELIVERED">Доставлен</option><option value="CANCELLED">Отменён</option><option value="PROCESSING">В обработке</option></select></label><label>Номер заказа<input id="history-order" inputmode="numeric" pattern="[0-9]+" placeholder="Например, 123456"></label><button class="button primary">Найти</button><p class="hint filter-hint">До 30 дней за один поиск. При поиске по номеру даты и статус не учитываются.</p></form>
+        <p class="hint">История загружается из Маркета без копий отправленных ключей и инструкций. Отмена заказа не равна оформленному возврату.</p>
+        <div id="history" class="order-list" aria-live="polite"></div><button id="more-history" class="button more" hidden>Загрузить ещё заказы</button>
+      </section>
+      <section id="chats-panel" class="panel" hidden>
+        <div class="page-head"><div><p class="eyebrow">ОБЩЕНИЕ С ПОКУПАТЕЛЯМИ</p><h1>Переписка</h1><p class="muted">Чаты всех магазинов кабинета. Заказы и обращения покупателей.</p></div><button id="refresh-chats" class="button">Обновить</button></div>
+        <form id="chat-filter" class="chat-filters"><label>Номер заказа<input id="chat-order" inputmode="numeric" pattern="[0-9]+" placeholder="Все заказы"></label><label class="check"><input id="chat-waiting" type="checkbox"> Ждут ответа</label><button class="button">Найти</button></form>
+        <div class="chat-layout"><aside class="card chat-sidebar" aria-label="Список чатов"><div id="chats"></div><button id="more-chats" class="button more" hidden>Ещё чаты</button></aside><section id="conversation" class="card conversation" aria-label="Сообщения"><div class="empty"><h2>Выберите переписку</h2><p>Сообщения и поле для ответа появятся здесь.</p></div></section></div>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body></html>
