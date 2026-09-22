@@ -1,6 +1,0 @@
-{
-  "name": "yandex-market-digital-goods", "version": "2.0.0", "private": true,
-  "type": "module", "description": "Цифровые заказы, история и переписка Яндекс Маркета",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node server.js", "demo": "node server.js --demo", "test": "node --test", "check": "node --check server.js && node --check src/api.js && node --check public/app.js"}
-}
