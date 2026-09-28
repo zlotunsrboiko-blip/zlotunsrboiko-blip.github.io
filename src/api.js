@@ -124,6 +124,7 @@ export async function handleApi(req, env, fetcher = fetch) {
       if(route==='/api/pool/items'&&req.method==='POST')return json(await store.saveItems(await body(req)));
       if(route==='/api/pool/reveal'&&req.method==='POST')return json(await store.reveal((await body(req)).id));
       if(route==='/api/pool/edit'&&req.method==='POST')return json(await store.edit(await body(req)));
+      if(route==='/api/pool/delete'&&req.method==='POST')return json(await store.remove(await body(req)));
       if(route==='/api/pool/prepare'&&req.method==='POST'){
         const input=await body(req),isTest=input.test===true,order=await findOrder(input.orderId,isTest);
         if(order.status!=='PROCESSING'||order.delivery?.type!=='DIGITAL'||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))throw new ApiError('Автовыдача доступна только для цифровых кодов в обработке.',409);
@@ -137,7 +138,10 @@ export async function handleApi(req, env, fetcher = fetch) {
       if(route==='/api/ledger/payout'&&req.method==='POST')return json(await store.payout(await body(req)));
       if(route==='/api/ledger/prepared'&&req.method==='GET')return json({delivery:await store.prepared(p.get('orderId'))});
       if(route==='/api/ledger/audit'&&req.method==='GET')return json({events:(await store.q('SELECT * FROM audit WHERE entity_id=? ORDER BY id DESC LIMIT 100',p.get('id')||'').all()).results});
-      if(route==='/api/ledger/status'&&req.method==='GET')return json({automation:enabled(env.AUTO_DELIVERY),marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
+      if(route==='/api/ledger/status'&&req.method==='GET'){
+        const sheetsJob=await store.q("SELECT updated_at FROM jobs WHERE name='sheets_last_success'").first();
+        return json({automation:enabled(env.AUTO_DELIVERY),marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),sheetsLastSuccess:sheetsJob?.updated_at||null,events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
+      }
     }
     if (route === '/api/config' && req.method === 'GET') {
       const token = await market('/v2/auth/token', {});

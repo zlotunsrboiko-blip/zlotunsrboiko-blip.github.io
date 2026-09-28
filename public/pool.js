@@ -39,6 +39,7 @@ async function editItem(id){
     if(!['available','blocked'].includes(row.status)){const pre=el('pre','secret-block');pre.textContent=[row.secret.login||row.secret.code,row.secret.password,row.secret.twoFactor,row.secret.note].filter(Boolean).join('\n');d.append(el('p','hint','Данные зарезервированной или завершённой выдачи сохранены. Для исправления ещё не отправленной выдачи сначала освободите резерв в учёте заказов.'),pre);return;}
     const status=field('Статус','select');status.input.append(new Option('Доступен для выдачи','available'),new Option('Заблокирован','blocked'));status.input.value=row.status;
     submitForm(d,[...c.fields,status],async()=>{await post('/api/pool/edit',{id,version:row.version,status:status.input.value,...c.value()});await loadPool();});
+    d.append(button('Удалить из пула',async()=>{if(!confirm('Удалить этот товар из пула без возможности восстановления?'))return;try{await post('/api/pool/delete',{id,version:row.version});d.close();await loadPool();toast('Товар удалён из пула.');}catch(e){notice(e.message);}},'button quiet'));
   }catch(e){notice(e.message);}
 }
 async function loadPool(more=false){
@@ -58,7 +59,8 @@ async function ledgerDetails(order){
     d.append(el('p','hint',`Создан ${formatDate(order.created_at)}. ${poolLabels[order.delivery_state]||'Данные выдачи пока отсутствуют'}.`));
     d.append(dataTable(['Позиция','Единица','Логин / CDK','Пароль','2FA'],result.units.map(u=>[u.item_id,u.unit_index+1,u.secret.login||u.secret.code,u.secret.password,u.secret.twoFactor])));
     if(['prepared','rejected'].includes(order.delivery_state)){
-      d.append(button('Отправить сохранённые данные',async()=>{if(!confirm('Отправить эти данные покупателю?'))return;try{await post('/api/deliver',{orderId:order.id});d.close();await loadLedger();}catch(e){toast(e.message);}},'button primary'));
+      d.append(el('p','hint',order.delivery_state==='prepared'?'Автовыдача отправит эти данные сама в течение минуты. Кнопка ниже нужна только как аварийный запуск.':'Маркет ранее отклонил отправку. Проверьте данные перед повторным запуском.'));
+      d.append(button('Аварийно отправить сейчас',async()=>{if(!confirm('Отправить эти данные покупателю сейчас?'))return;try{await post('/api/deliver',{orderId:order.id});d.close();await loadLedger();}catch(e){toast(e.message);}},'button primary'));
       d.append(button('Освободить резерв для исправления',async()=>{try{await post('/api/pool/release',{orderId:order.id});d.close();await loadLedger();}catch(e){toast(e.message);}}));
     }
     if(['uncertain','sending'].includes(order.delivery_state))d.append(el('p','error-text','Результат отправки требует проверки в Маркете. Товар остаётся в резерве; повторная автоматическая выдача отключена для этого заказа.'));
@@ -74,7 +76,7 @@ async function loadLedger(more=false){
     if(!more)$('#ledger-table').replaceChildren();$('#ledger-table').append(dataTable(['№ заказа','Дата','Маркет','Выдача','Единиц','Цена заказа','После комиссий','Данные'],result.orders.map(o=>[o.id,formatDate(o.created_at),labels[o.status]||o.status,poolLabels[o.delivery_state]||'Не выдавался сервисом',o.units,rub(o.amount_kopecks),rub(o.payout_kopecks),button('Открыть',()=>ledgerDetails(o),'button quiet')])));
     if(!result.total)$('#ledger-table').replaceChildren(el('p','empty','Заказы появятся после синхронизации с Маркетом.'));$('#ledger-more').hidden=result.nextOffset===null;ledgerOffset=result.nextOffset;
     const status=await api('/api/ledger/status');if(generation!==ledgerGeneration)return;
-    $('#automation-status').textContent=`Автовыдача: ${status.automation?'включена':'выключена'} · Ключ на сервере: ${status.marketKeyConfigured?'настроен':'не задан'} · Google Таблицы: ${status.sheetsConfigured?'настроены':'не подключены'}`;
+    $('#automation-status').textContent=`Автовыдача: ${status.automation?'включена':'выключена'} · Ключ на сервере: ${status.marketKeyConfigured?'настроен':'не задан'} · Google Таблицы: ${status.sheetsConfigured?'настроены':'не подключены'}${status.sheetsLastSuccess?` · Последнее обновление: ${formatDate(status.sheetsLastSuccess)}`:''}`;
     $('#automation-events').replaceChildren(...status.events.map(e=>el('li','hint',`${formatDate(e.created_at)} — ${e.action}`)));
   }catch(e){notice(e.message);}
 }

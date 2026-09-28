@@ -27,6 +27,14 @@ test('pool ciphertext, duplicate identities, revision conflict, blocked stock',a
   await assert.rejects(store.edit({...item.secret,id:row.id,version:1,status:'available'}),/другом окне/);
   assert.equal((await store.categories())[0].available,1);env.DB.close();
 });
+test('available or blocked stock can be deleted, but order history stock cannot',async()=>{
+  const {env,store,mock}=await setup();
+  const first=await store.q("SELECT id,version FROM inventory WHERE status='available' ORDER BY created_at,id LIMIT 1").first();
+  assert.equal((await store.remove(first)).ok,true);assert.equal((await store.categories())[0].available,1);
+  await store.prepare(mock.orders[0]);
+  const reserved=await store.q("SELECT id,version FROM inventory WHERE status='reserved'").first();
+  await assert.rejects(store.remove(reserved),/историей заказа/);env.DB.close();
+});
 test('prepare snapshots and reserves atomically; send only once and expose separate payout',async()=>{
   const {env,store,api,mock}=await setup(),orderId=84729105;
   assert.equal((await api('/api/pool/prepare',{orderId})).status,200);
@@ -75,6 +83,17 @@ test('background processing fills ledger, is idempotent, and skips test/chat ord
   assert.equal((await store.prepared(84729105)).state,'accepted');
   assert.equal((await store.ledger(new URLSearchParams({orderId:'84729105'}))).orders[0].status,'DELIVERED');
   const rows=await sheetRows(store);assert.ok(rows.orders[0].includes('Выплата после комиссий, ₽'));assert.equal(rows.pool.length,3);env.DB.close();
+});
+test('background finds an order through history when the processing list lags',async()=>{
+  const {env,store,mock}=await setup();
+  const lagging=async(url,options)=>{
+    const body=options?.body?JSON.parse(options.body):{};
+    if(String(url).includes('/v1/businesses/')&&body.statuses)return new Response(JSON.stringify({orders:[],paging:{}}),{status:200,headers:{'Content-Type':'application/json'}});
+    return mock.fetcher(url,options);
+  };
+  await runAutomation(env,lagging);
+  assert.equal(mock.calls.filter(c=>c.path.endsWith('/deliverDigitalGoods')).length,1);
+  assert.equal((await store.prepared(84729105)).state,'accepted');env.DB.close();
 });
 test('multiple lines with same offer select distinct accounts and sheet totals are not duplicated',async()=>{
   const {env,store,mock}=await setup(),o=mock.orders[0];o.items.push({...o.items[0],id:2});await store.prepare(o);

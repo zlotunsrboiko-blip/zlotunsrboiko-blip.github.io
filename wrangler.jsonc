@@ -5,6 +5,7 @@
   "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
   "d1_databases": [{"binding":"DB","database_name":"market-sales","database_id":"8b08121b-a58e-4970-b013-b8b852e3b5c2","migrations_dir":"migrations"}],
   "triggers": {"crons":["* * * * *"]},
-  "vars": {"YANDEX_BUSINESS_ID": "216918278", "YANDEX_CAMPAIGN_ID": "149189839", "GITHUB_PAGES_ORIGIN": "https://zlotunsrboiko-blip.github.io", "GOOGLE_SHEET_ID":"1nn9pfHUjlV10aZOXlaFfwoVdeJvZAG4H_bhMqYlJ9_A", "POOL_REQUIRED":"true", "AUTO_DELIVERY":"false"},
+  "vars": {"YANDEX_BUSINESS_ID": "216918278", "YANDEX_CAMPAIGN_ID": "149189839", "GITHUB_PAGES_ORIGIN": "https://zlotunsrboiko-blip.github.io", "GOOGLE_SHEET_ID":"1nn9pfHUjlV10aZOXlaFfwoVdeJvZAG4H_bhMqYlJ9_A", "POOL_REQUIRED":"true", "AUTO_DELIVERY": "true"},
   "observability": {"enabled": false}
 }
+

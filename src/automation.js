@@ -15,19 +15,21 @@ export async function runAutomation(env,fetcher=fetch){
     const result=await r.json();if(!r.ok)throw new Error('Internal operation failed');return result;
   }
   try{
+    const seen=new Set();
+    async function processOrder(order){
+      if(!enabled(env.AUTO_DELIVERY)||order.fake||order.status!=='PROCESSING'||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))return;
+      const id=String(order.id??order.orderId);if(seen.has(id))return;seen.add(id);
+      try{
+        const saved=await store.prepared(id);
+        if(saved&&saved.state!=='prepared')return;
+        if(!saved)await api('/api/pool/prepare',{orderId:id});
+        await api('/api/deliver',{orderId:id});delivered++;
+      }catch{failures++;await store.audit(id,'auto_delivery_needs_attention');}
+    }
     let page=null,passes=0;
     do{
       const result=await api('/api/orders?'+new URLSearchParams({fake:'false',...(page?{pageToken:page}:{})}));
-      for(const order of result.orders){
-        if(!enabled(env.AUTO_DELIVERY)||order.fake||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))continue;
-        const id=String(order.id??order.orderId);
-        try{
-          const saved=await store.prepared(id);
-          if(saved&&saved.state!=='prepared')continue;
-          if(!saved)await api('/api/pool/prepare',{orderId:id});
-          await api('/api/deliver',{orderId:id});delivered++;
-        }catch{failures++;await store.audit(id,'auto_delivery_needs_attention');}
-      }
+      for(const order of result.orders)await processOrder(order);
       page=result.nextPageToken;passes++;
     }while(page&&passes<20);
     if(page)throw new Error('Processing pagination limit reached');
@@ -40,8 +42,11 @@ export async function runAutomation(env,fetcher=fetch){
     // Track externally fulfilled/cancelled orders as well. Recent orders are upserted, never appended twice.
     const from=new Date(Date.now()-29*86400000).toISOString().slice(0,10),to=t.slice(0,10);
     page=null;passes=0;
-    do{const r=await api('/api/history?'+new URLSearchParams({from,to,...(page?{pageToken:page}:{})}));page=r.nextPageToken;passes++;}while(page&&passes<20);
+    do{const r=await api('/api/history?'+new URLSearchParams({from,to,...(page?{pageToken:page}:{})}));for(const order of r.orders)await processOrder(order);page=r.nextPageToken;passes++;}while(page&&passes<20);
     if(page)throw new Error('History pagination limit reached');
+    // A manual reserve or a transient list lag must never require a second confirmation.
+    const ready=(await store.q("SELECT order_id FROM deliveries WHERE state='prepared' LIMIT 50").all()).results;
+    for(const row of ready){if(seen.has(row.order_id))continue;try{await api('/api/deliver',{orderId:row.order_id});delivered++;}catch{failures++;await store.audit(row.order_id,'auto_delivery_needs_attention');}}
     try{await syncSheets(store,env,fetcher);}catch{failures++;await store.audit('automation','google_sync_failed');}
     await store.audit('automation',`finished:delivered=${delivered},issues=${failures}`);
     return {ok:true,delivered,failures};

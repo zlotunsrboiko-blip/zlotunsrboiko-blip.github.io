@@ -112,6 +112,14 @@ export class Inventory {
     if(!result.meta.changes)throw new StoreError('Запись изменилась в другом окне. Обновите пул.',409);
     await this.audit(row.id,'inventory_edited');return {ok:true};
   }
+  async remove(input){
+    const row=await this.q('SELECT status,version FROM inventory WHERE id=?',input.id).first();
+    if(!row)throw new StoreError('Товар не найден.',404);
+    if(!['available','blocked'].includes(row.status))throw new StoreError('Зарезервированный или выданный товар удалить нельзя: он связан с историей заказа.',409);
+    const result=await this.q("DELETE FROM inventory WHERE id=? AND version=? AND status IN ('available','blocked')",input.id,input.version).run();
+    if(!result.meta.changes)throw new StoreError('Запись изменилась в другом окне. Обновите пул.',409);
+    await this.audit(input.id,'inventory_deleted');return {ok:true};
+  }
   async recordOrders(orders){
     const values=[];
     for(const o of orders){
