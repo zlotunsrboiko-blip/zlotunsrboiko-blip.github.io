@@ -140,7 +140,7 @@ export async function handleApi(req, env, fetcher = fetch) {
       if(route==='/api/ledger/audit'&&req.method==='GET')return json({events:(await store.q('SELECT * FROM audit WHERE entity_id=? ORDER BY id DESC LIMIT 100',p.get('id')||'').all()).results});
       if(route==='/api/ledger/status'&&req.method==='GET'){
         const sheetsJob=await store.q("SELECT updated_at FROM jobs WHERE name='sheets_last_success'").first();
-        return json({automation:enabled(env.AUTO_DELIVERY),marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),sheetsLastSuccess:sheetsJob?.updated_at||null,events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
+        return json({automation:enabled(env.AUTO_DELIVERY),marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),sheetsLastSuccess:sheetsJob?.updated_at||null,events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' OR action LIKE 'auto_delivery_failed:%' ORDER BY id DESC LIMIT 20").all()).results});
       }
     }
     if (route === '/api/config' && req.method === 'GET') {

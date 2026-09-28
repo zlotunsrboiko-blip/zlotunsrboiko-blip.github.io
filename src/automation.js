@@ -2,6 +2,7 @@ import {handleApi} from './api.js';
 import {Inventory} from './inventory.js';
 import {syncSheets} from './sheets.js';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
+const reason=error=>String(error?.message||'Неизвестная ошибка').replace(/\s+/g,' ').slice(0,300);
 export async function runAutomation(env,fetcher=fetch){
   if(!env.DB||!env.YANDEX_API_KEY)return {configured:false};
   const store=new Inventory(env),t=new Date().toISOString(),lock=crypto.randomUUID();
@@ -24,7 +25,7 @@ export async function runAutomation(env,fetcher=fetch){
         if(saved&&saved.state!=='prepared')return;
         if(!saved)await api('/api/pool/prepare',{orderId:id});
         await api('/api/deliver',{orderId:id});delivered++;
-      }catch{failures++;await store.audit(id,'auto_delivery_needs_attention');}
+      }catch(error){failures++;await store.audit(id,`auto_delivery_failed:${reason(error)}`);}
     }
     let page=null,passes=0;
     do{
@@ -46,10 +47,10 @@ export async function runAutomation(env,fetcher=fetch){
     if(page)throw new Error('History pagination limit reached');
     // A manual reserve or a transient list lag must never require a second confirmation.
     const ready=(await store.q("SELECT order_id FROM deliveries WHERE state='prepared' LIMIT 50").all()).results;
-    for(const row of ready){if(seen.has(row.order_id))continue;try{await api('/api/deliver',{orderId:row.order_id});delivered++;}catch{failures++;await store.audit(row.order_id,'auto_delivery_needs_attention');}}
-    try{await syncSheets(store,env,fetcher);}catch{failures++;await store.audit('automation','google_sync_failed');}
+    for(const row of ready){if(seen.has(row.order_id))continue;try{await api('/api/deliver',{orderId:row.order_id});delivered++;}catch(error){failures++;await store.audit(row.order_id,`auto_delivery_failed:${reason(error)}`);}}
+    try{await syncSheets(store,env,fetcher);}catch(error){failures++;await store.audit('automation',`google_sync_failed:${reason(error)}`);}
     await store.audit('automation',`finished:delivered=${delivered},issues=${failures}`);
     return {ok:true,delivered,failures};
-  }catch{await store.audit('automation','market_sync_failed');return {ok:false};}
+  }catch(error){await store.audit('automation',`market_sync_failed:${reason(error)}`);return {ok:false};}
   finally{await store.q("DELETE FROM jobs WHERE name='automation_lock' AND value=?",lock).run();}
 }
