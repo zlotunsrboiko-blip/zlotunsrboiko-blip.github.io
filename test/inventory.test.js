@@ -41,6 +41,14 @@ test('prepare snapshots and reserves atomically; send only once and expose separ
   await store.payout({orderId,payout:'1200,45'});assert.equal((await store.ledger(new URLSearchParams())).orders[0].payout_kopecks,120045);
   await assert.rejects(store.release({orderId}),/Нельзя освободить/);env.DB.close();
 });
+test('explicit Yandex test order exercises the pool and delivery path',async()=>{
+  const {env,store,api,mock}=await setup(),testOrder={...mock.orders[0],id:99900001,fake:true};mock.orders.push(testOrder);
+  assert.equal((await api('/api/pool/prepare',{orderId:testOrder.id})).status,404);
+  assert.equal((await api('/api/pool/prepare',{orderId:testOrder.id,test:true})).status,200);
+  assert.equal((await api('/api/deliver',{orderId:testOrder.id})).status,200);
+  assert.equal((await store.q('SELECT fake FROM orders WHERE id=?',String(testOrder.id)).first()).fake,1);
+  assert.equal((await store.prepared(testOrder.id)).state,'accepted');env.DB.close();
+});
 test('unknown result remains reserved across later runs and is never resent',async()=>{
   const {env,store,mock}=await setup();let attempts=0;
   const fail=async(url,options)=>{if(String(url).endsWith('/deliverDigitalGoods')){attempts++;throw new Error('timeout');}return mock.fetcher(url,options);};

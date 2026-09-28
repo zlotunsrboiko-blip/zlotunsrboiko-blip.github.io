@@ -142,11 +142,11 @@ export class Inventory {
     const row=await this.q('SELECT * FROM deliveries WHERE order_id=?',String(id)).first();
     return row?{...row,payload:await unseal(await this.key(),row.payload)}:null;
   }
-  async prepare(order,manualItems=null){
+  async prepare(order,manualItems=null,allowFake=false){
     const orderId=String(order.id??order.orderId);
     if(await this.prepared(orderId))throw new StoreError('Выдача уже подготовлена. Откройте её в учёте заказов.',409);
     await this.recordOrders([order]);
-    if(order.fake)throw new StoreError('Тестовый заказ нельзя выдавать из реального пула.');
+    if(order.fake&&!allowFake)throw new StoreError('Тестовый заказ требует явного запуска из раздела «Тестовые заказы».');
     const key=await this.key(),t=now(),items=[],units=[],selected=[];
     for(const item of order.items||[]){
       const count=Number(item.count??item.quantity);

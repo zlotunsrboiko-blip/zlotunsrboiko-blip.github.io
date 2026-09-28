@@ -108,8 +108,8 @@ export async function handleApi(req, env, fetcher = fetch) {
       }
       return result;
     }
-    async function findOrder(orderId) {
-      const result = await market(`/v1/businesses/${business}/orders?limit=50`, {campaignIds: [campaign], orderIds: [id(orderId, 'Номер заказа')]});
+    async function findOrder(orderId, fake=false) {
+      const result = await market(`/v1/businesses/${business}/orders?limit=50`, {campaignIds: [campaign], orderIds: [id(orderId, 'Номер заказа')], fake});
       const order = result.orders?.find(x => String(x.id ?? x.orderId) === String(orderId));
       if (!order || (order.campaignId && Number(order.campaignId) !== campaign)) throw new ApiError('Заказ не найден в выбранном магазине.', 404);
       return order;
@@ -124,9 +124,9 @@ export async function handleApi(req, env, fetcher = fetch) {
       if(route==='/api/pool/reveal'&&req.method==='POST')return json(await store.reveal((await body(req)).id));
       if(route==='/api/pool/edit'&&req.method==='POST')return json(await store.edit(await body(req)));
       if(route==='/api/pool/prepare'&&req.method==='POST'){
-        const input=await body(req),order=await findOrder(input.orderId);
+        const input=await body(req),isTest=input.test===true,order=await findOrder(input.orderId,isTest);
         if(order.status!=='PROCESSING'||order.delivery?.type!=='DIGITAL'||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))throw new ApiError('Автовыдача доступна только для цифровых кодов в обработке.',409);
-        const payload=await store.prepare(order);
+        const payload=await store.prepare(order,null,isTest);
         try{validateDelivery(payload,order);}catch(e){await store.release({orderId:payload.orderId});throw e;}
         return json(payload);
       }
@@ -171,13 +171,15 @@ export async function handleApi(req, env, fetcher = fetch) {
     }
     if (route === '/api/deliver' && req.method === 'POST') {
       const input = await body(req);
-      const order = await findOrder(input.orderId);
+      const savedOrder=store?await store.q('SELECT fake FROM orders WHERE id=?',String(input.orderId)).first():null;
+      const isTest=input.test===true||savedOrder?.fake===1;
+      const order = await findOrder(input.orderId,isTest);
       if(env.POOL_REQUIRED==='true'&&!store)throw new StoreError('Подключите базу данных перед выдачей.',503);
       let payload=input;
       if(store){
         let prepared=await store.prepared(input.orderId);
         if(prepared&&input.items)throw new StoreError('У заказа уже есть сохранённая выдача. Откройте её в разделе «Учёт заказов».',409);
-        if(!prepared){validateDelivery(input,order);await store.prepare(order,input.items);prepared=await store.prepared(input.orderId);}
+        if(!prepared){validateDelivery(input,order);await store.prepare(order,input.items,isTest);prepared=await store.prepared(input.orderId);}
         payload=prepared.payload;
       }
       const items = validateDelivery(payload, order);
