@@ -219,6 +219,7 @@ async function editItem(id){
     if(!['available','blocked'].includes(row.status)){const pre=el('pre','secret-block');pre.textContent=[row.secret.login||row.secret.code,row.secret.password,row.secret.twoFactor,row.secret.note].filter(Boolean).join('\n');d.append(el('p','hint','Данные зарезервированной или завершённой выдачи сохранены. Для исправления ещё не отправленной выдачи сначала освободите резерв в учёте заказов.'),pre);return;}
     const status=field('Статус','select');status.input.append(new Option('Доступен для выдачи','available'),new Option('Заблокирован','blocked'));status.input.value=row.status;
     submitForm(d,[...c.fields,status],async()=>{await post('/api/pool/edit',{id,version:row.version,status:status.input.value,...c.value()});await loadPool();});
+    d.append(button('Удалить из пула',async()=>{if(!confirm('Удалить этот товар из пула без возможности восстановления?'))return;try{await post('/api/pool/delete',{id,version:row.version});d.close();await loadPool();toast('Товар удалён из пула.');}catch(e){notice(e.message);}},'button quiet'));
   }catch(e){notice(e.message);}
 }
 async function loadPool(more=false){
