@@ -2,15 +2,16 @@
 window.connectionReady = (async () => {
   window.serviceUrl = path => path;
   if (!location.hostname.endsWith('.github.io')) return;
+  const defaultServiceOrigin = 'https://digital-goods-service.zlotunsr-boiko.workers.dev';
   const form = document.querySelector('#login-form');
   form.hidden = true;
   const box = document.createElement('section');
   box.innerHTML = '<h2>Подключение к Маркету</h2><p class="muted">Сайт уже открыт на GitHub Pages. Для заказов и переписки подключите серверную часть приложения.</p><label>Адрес вашего сервиса<input type="url" placeholder="https://digital-goods-service.…workers.dev" autocomplete="url"></label><p class="hint">Укажите адрес своего опубликованного сервиса. Только ему будут передаваться введённые ключ и пароль.</p><p class="error-text" role="alert"></p><button type="button" class="button primary wide">Подключить</button><details><summary>Почему нужен ещё один адрес?</summary><p class="hint">GitHub Pages показывает страницы, но не запускает сервер отправки заказов. Серверная часть находится в этом же проекте и размещается отдельно. Инструкция — в файле README.md.</p></details>';
   form.before(box);
   const input = box.querySelector('input'), error = box.querySelector('.error-text'), submit = box.querySelector('button');
-  try { input.value = localStorage.getItem('market-service-url') || ''; } catch {}
+  try { input.value = localStorage.getItem('market-service-url') || defaultServiceOrigin; } catch { input.value = defaultServiceOrigin; }
   await new Promise(resolve => {
-    submit.addEventListener('click', async () => {
+    const connect = async () => {
       submit.disabled = true; error.textContent = '';
       try {
         const url = new URL(input.value.trim());
@@ -29,6 +30,8 @@ window.connectionReady = (async () => {
         resolve();
       } catch(e) { error.textContent = e instanceof TypeError ? 'Не удалось подключиться. Проверьте адрес, доступность сервиса и разрешение для вашего сайта GitHub Pages.' : e.message; }
       finally { submit.disabled=false; }
-    });
+    };
+    submit.addEventListener('click', connect);
+    connect();
   });
 })();
