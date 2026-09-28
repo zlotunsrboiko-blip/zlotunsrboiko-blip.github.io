@@ -7,7 +7,7 @@ test('Google sync uses service-account token, typed strings, atomic replacement 
  const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
  const pem='-----BEGIN PRIVATE KEY-----\n'+Buffer.from(await crypto.subtle.exportKey('pkcs8',pair.privateKey)).toString('base64')+'\n-----END PRIVATE KEY-----';
  const env={DB:localDB(),DATA_ENCRYPTION_KEY:Buffer.alloc(32,2).toString('base64'),GOOGLE_SHEET_ID:'test-sheet',GOOGLE_SERVICE_ACCOUNT_JSON:JSON.stringify({client_email:'test@example.invalid',private_key:pem})};
- const store=new Inventory(env),c=await store.saveCategory({name:'Test',offerId:'TEST',slip:'Use code',activateTill:'2030-01-01'});
+ const store=new Inventory(env),c=await store.saveCategory({name:'Test',kind:'code',offerId:'TEST',slip:'Use code',activateTill:'2030-01-01'});
  await store.saveItems({categoryId:c.id,items:[{kind:'code',code:'=IMPORTXML("https://example.invalid")'}]});
  const calls=[];const fetcher=async(url,opts)=>{calls.push({url,opts});if(url.includes('oauth2'))return Response.json({access_token:'test-token'});if(opts.method==='GET')return Response.json({sheets:[{properties:{sheetId:1,title:'Архив Excel',gridProperties:{rowCount:1000,columnCount:26}}},{properties:{sheetId:2,title:'Заказы — авто',gridProperties:{rowCount:1000,columnCount:26}}},{properties:{sheetId:3,title:'Пул — авто',gridProperties:{rowCount:1000,columnCount:26}}}]});return Response.json({});};
  await syncSheets(store,env,fetcher);

@@ -9,13 +9,14 @@ import {makeMarketMock} from './fixtures.js';
 async function setup(){
   const env={DB:localDB(),DATA_ENCRYPTION_KEY:Buffer.alloc(32,9).toString('base64'),YANDEX_API_KEY:'demo-key',YANDEX_BUSINESS_ID:'216918278',YANDEX_CAMPAIGN_ID:'149189839',APP_PASSWORD:'a-long-example-password',REQUIRE_PASSWORD:'true',AUTO_DELIVERY:'true'};
   const store=new Inventory(env),mock=makeMarketMock();
-  const category=await store.saveCategory({name:'Подписки',offerId:'DIGITAL-84729105',slip:'Инструкция',activateTill:'2030-12-31'});
-  await store.saveItems({categoryId:category.id,items:[{kind:'account',login:'demo-login',password:'demo-password',twoFactor:'demo-backup'},{kind:'code',code:'DEMO-CDK-2'}]});
+  const category=await store.saveCategory({name:'Подписки',kind:'account',offerId:'DIGITAL-84729105',slip:'Инструкция',activateTill:'2030-12-31'});
+  await store.saveItems({categoryId:category.id,items:[{kind:'account',login:'demo-login',password:'demo-password',twoFactor:'demo-backup'},{kind:'account',login:'demo-login-2',password:'demo-password-2'}]});
   async function api(path,input){const response=await handleApi(new Request('https://example.test'+path,{method:input===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-App-Password':env.APP_PASSWORD},body:input===undefined?undefined:JSON.stringify(input)}),env,mock.fetcher);return {status:response.status,data:await response.json()};}
   return {env,store,mock,category,api};
 }
 test('pool ciphertext, duplicate identities, revision conflict, blocked stock',async()=>{
   const {env,store,category}=await setup();
+  await assert.rejects(store.saveItems({categoryId:category.id,items:[{kind:'code',code:'WRONG-TYPE'}]}),/только аккаунты/);
   const row=await store.q('SELECT * FROM inventory WHERE kind=?','account').first();
   assert.ok(!row.secret.includes('demo-login'));assert.ok(!row.secret.includes('demo-password'));
   const key=await store.key();assert.equal((await unseal(key,row.secret)).login,'demo-login');

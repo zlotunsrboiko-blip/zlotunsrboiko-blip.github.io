@@ -54,13 +54,14 @@ export class Inventory {
     SUM(CASE WHEN i.status='blocked' THEN 1 ELSE 0 END) AS blocked
     FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results;}
   async saveCategory(input){
-    const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(input.activateTill,'Срок активации',10,true);
+    const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(input.activateTill,'Срок активации',10,true),kind=input.kind||'account';
+    if(!['account','code'].includes(kind))throw new StoreError('Выберите тип товара: аккаунт или CDK.');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(until)||!Number.isFinite(Date.parse(until))||new Date(until).toISOString().slice(0,10)!==until)throw new StoreError('Проверьте срок активации.');
     const t=now();
     const exists=await this.q('SELECT id FROM categories WHERE offer_id=? AND id<>?',offer,id).first();
     if(exists)throw new StoreError('Этот артикул уже связан с другой категорией.',409);
-    if(input.id&&!(await this.q('SELECT id FROM categories WHERE id=?',id).first()))throw new StoreError('Категория не найдена.',404);
-    await this.db.batch([this.q('INSERT INTO categories VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,slip,until,t,t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
+    if(input.id){if(!(await this.q('SELECT id FROM categories WHERE id=?',id).first()))throw new StoreError('Категория не найдена.',404);if(await this.q('SELECT id FROM inventory WHERE category_id=? AND kind<>? LIMIT 1',id,kind).first())throw new StoreError('Тип категории нельзя изменить, пока в ней есть товары другого типа.',409);}
+    await this.db.batch([this.q('INSERT INTO categories(id,name,offer_id,item_kind,slip,activate_till,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,item_kind=excluded.item_kind,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,kind,slip,until,t,t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
     return {id};
   }
   async fingerprint(c){
@@ -68,12 +69,12 @@ export class Inventory {
     return b64(new Uint8Array(await crypto.subtle.sign('HMAC',key,enc.encode(c.kind+':'+(c.kind==='code'?c.code:c.login)))));
   }
   async saveItems(input){
-    if(!await this.q('SELECT id FROM categories WHERE id=?',input.categoryId).first())throw new StoreError('Выберите существующую категорию.');
+    const category=await this.q('SELECT id,item_kind FROM categories WHERE id=?',input.categoryId).first();if(!category)throw new StoreError('Выберите существующую категорию.');
     const items=input.items;
     if(!Array.isArray(items)||items.length<1||items.length>100)throw new StoreError('За раз можно добавить от 1 до 100 товаров.');
     const key=await this.key(),statements=[],t=now(),seen=new Set(),records=[];
     for(const value of items){
-      const c=credential(value),fingerprint=await this.fingerprint(c);
+      const c=credential(value);if(c.kind!==category.item_kind)throw new StoreError(`Эта категория принимает только ${category.item_kind==='account'?'аккаунты':'CDK-коды'}. Создайте отдельную категорию для другого типа.`,409);const fingerprint=await this.fingerprint(c);
       if(seen.has(fingerprint))throw new StoreError('Такой логин или код повторяется в загрузке. Ничего не добавлено.',409);
       seen.add(fingerprint);const id=uid();
       records.push([id,input.categoryId,c.kind,await seal(key,c),fingerprint,t,t]);
@@ -103,7 +104,9 @@ export class Inventory {
     if(!row)throw new StoreError('Товар не найден.',404);
     if(!['available','blocked'].includes(row.status))throw new StoreError('Выданный или зарезервированный товар нельзя перезаписать. История выдачи сохранена.',409);
     if(!['available','blocked'].includes(input.status))throw new StoreError('Доступны статусы «Доступен» и «Заблокирован».');
-    const c=credential(input),key=await this.key(),fp=await this.fingerprint(c);
+    const c=credential(input),category=await this.q('SELECT item_kind FROM categories WHERE id=?',row.category_id).first();
+    if(!category||c.kind!==category.item_kind)throw new StoreError(`Эта категория принимает только ${category?.item_kind==='code'?'CDK-коды':'аккаунты'}.`,409);
+    const key=await this.key(),fp=await this.fingerprint(c);
     if(await this.q('SELECT id FROM inventory WHERE fingerprint=? AND id<>?',fp,row.id).first())throw new StoreError('Такой логин или код уже есть.',409);
     const result=await this.q("UPDATE inventory SET kind=?,secret=?,fingerprint=?,status=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND status IN ('available','blocked')",c.kind,await seal(key,c),fp,input.status,now(),row.id,input.version).run();
     if(!result.meta.changes)throw new StoreError('Запись изменилась в другом окне. Обновите пул.',409);
@@ -154,7 +157,7 @@ export class Inventory {
       }else{
         const category=await this.q('SELECT * FROM categories WHERE offer_id=?',item.offerId||'').first();
         if(!category)throw new StoreError(`Нет категории для артикула ${item.offerId||item.id}.`);
-        const rows=(await this.q("SELECT * FROM inventory WHERE category_id=? AND status='available' ORDER BY created_at,id LIMIT ?",category.id,count+selected.length).all()).results.filter(r=>!selected.some(s=>s.id===r.id)).slice(0,count);
+        const rows=(await this.q("SELECT * FROM inventory WHERE category_id=? AND kind=? AND status='available' ORDER BY created_at,id LIMIT ?",category.id,category.item_kind,count+selected.length).all()).results.filter(r=>!selected.some(s=>s.id===r.id)).slice(0,count);
         if(rows.length!==count)throw new StoreError(`В категории «${category.name}» недостаточно доступных товаров.`,409);
         const codes=[];
         for(let i=0;i<rows.length;i++){

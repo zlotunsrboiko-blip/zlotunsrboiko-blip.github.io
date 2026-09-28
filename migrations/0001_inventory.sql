@@ -1,6 +1,7 @@
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS categories (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, offer_id TEXT NOT NULL UNIQUE,
+ item_kind TEXT NOT NULL DEFAULT 'account' CHECK(item_kind IN ('account','code')),
  slip TEXT NOT NULL, activate_till TEXT NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
