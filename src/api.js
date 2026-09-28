@@ -1,5 +1,6 @@
 import {Inventory, StoreError} from './inventory.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
+const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -136,7 +137,7 @@ export async function handleApi(req, env, fetcher = fetch) {
       if(route==='/api/ledger/payout'&&req.method==='POST')return json(await store.payout(await body(req)));
       if(route==='/api/ledger/prepared'&&req.method==='GET')return json({delivery:await store.prepared(p.get('orderId'))});
       if(route==='/api/ledger/audit'&&req.method==='GET')return json({events:(await store.q('SELECT * FROM audit WHERE entity_id=? ORDER BY id DESC LIMIT 100',p.get('id')||'').all()).results});
-      if(route==='/api/ledger/status'&&req.method==='GET')return json({automation:env.AUTO_DELIVERY==='true',marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
+      if(route==='/api/ledger/status'&&req.method==='GET')return json({automation:enabled(env.AUTO_DELIVERY),marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
     }
     if (route === '/api/config' && req.method === 'GET') {
       const token = await market('/v2/auth/token', {});

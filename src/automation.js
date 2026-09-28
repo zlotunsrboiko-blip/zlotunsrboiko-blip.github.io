@@ -1,6 +1,7 @@
 import {handleApi} from './api.js';
 import {Inventory} from './inventory.js';
 import {syncSheets} from './sheets.js';
+const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export async function runAutomation(env,fetcher=fetch){
   if(!env.DB||!env.YANDEX_API_KEY)return {configured:false};
   const store=new Inventory(env),t=new Date().toISOString(),lock=crypto.randomUUID();
@@ -18,7 +19,7 @@ export async function runAutomation(env,fetcher=fetch){
     do{
       const result=await api('/api/orders?'+new URLSearchParams({fake:'false',...(page?{pageToken:page}:{})}));
       for(const order of result.orders){
-        if(env.AUTO_DELIVERY!=='true'||order.fake||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))continue;
+        if(!enabled(env.AUTO_DELIVERY)||order.fake||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))continue;
         const id=String(order.id??order.orderId);
         try{
           const saved=await store.prepared(id);
