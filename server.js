@@ -17,7 +17,7 @@ export function createServer(env, fetcher = fetch) {
         const response = await handleApi(request, env, fetcher);
         res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(await response.text()); return;
       }
-      const files = {'/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/connection.js': ['connection.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css']};
+      const files = {'/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/pool.js': ['pool.js', 'text/javascript'], '/connection.js': ['connection.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css']};
       const file = files[url.pathname];
       if (!file || !['GET', 'HEAD'].includes(req.method)) { res.writeHead(404); res.end(); return; }
       res.writeHead(200, {...securityHeaders, 'Content-Type': `${file[1]}; charset=utf-8`});
@@ -30,6 +30,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const env = {...process.env};
   const demo = process.argv.includes('--demo');
   if (demo) env.DEMO = 'true';
+  if(demo){
+    env.DB=(await import('./src/local-db.js')).localDB();
+    env.DATA_ENCRYPTION_KEY=Buffer.alloc(32,7).toString('base64');
+    const {Inventory}=await import('./src/inventory.js');const store=new Inventory(env);
+    for(const [offerId,name,count] of [['DIGITAL-84729105','Подписка · 1 месяц',4],['DIGITAL-84729083','Сертификаты',5]]){
+      const c=await store.saveCategory({name,offerId,slip:'Демонстрационная инструкция. Все данные вымышлены.',activateTill:'2030-12-31'});
+      await store.saveItems({categoryId:c.id,items:Array.from({length:count},(_,i)=>({kind:'code',code:`DEMO-${offerId}-${i+1}`}))});
+    }
+  }
   env.YANDEX_BUSINESS_ID ||= '216918278'; env.YANDEX_CAMPAIGN_ID ||= '149189839';
   if (env.NODE_ENV === 'production') env.REQUIRE_PASSWORD = 'true';
   if (demo && env.NODE_ENV === 'production') throw new Error('Демо доступно только локально.');

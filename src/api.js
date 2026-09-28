@@ -1,3 +1,4 @@
+import {Inventory, StoreError} from './inventory.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 export const securityHeaders = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
@@ -71,8 +72,8 @@ export function validateDelivery(input, order) {
 export async function handleApi(req, env, fetcher = fetch) {
   try {
     const url = new URL(req.url), p = url.searchParams, route = url.pathname;
-    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true'};
-    if (route === '/api/settings' && req.method === 'GET') return json(settings);
+    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB};
+    if (route === '/api/settings' && req.method === 'GET') return json({...settings,serverKeyConfigured:!!env.YANDEX_API_KEY});
     if (env.REQUIRE_PASSWORD === 'true' && (!env.APP_PASSWORD || env.APP_PASSWORD.length < 16)) throw new ApiError('В секретах хостинга нужно задать APP_PASSWORD длиной от 16 символов.', 503);
     if (req.headers.get('x-app-request') !== 'digital-goods') throw new ApiError('Откройте сервис в браузере.', 403);
     const origin = req.headers.get('origin');
@@ -81,7 +82,7 @@ export async function handleApi(req, env, fetcher = fetch) {
     let password;
     try { password = decodeURIComponent(req.headers.get('x-app-password') || ''); } catch { throw new ApiError('Некорректный пароль.', 401); }
     if (env.APP_PASSWORD && !await equalSecret(password, env.APP_PASSWORD)) throw new ApiError('Неверный пароль сервиса.', 401);
-    const key = req.headers.get('x-market-key');
+    const key = env.YANDEX_API_KEY || req.headers.get('x-market-key');
     if (!key || key.length > 2048) throw new ApiError('Введите API-ключ Маркета.', 401);
     const business = id(settings.businessId || req.headers.get('x-business-id'), 'ID кабинета');
     const campaign = id(settings.campaignId || req.headers.get('x-campaign-id'), 'ID магазина');
@@ -113,11 +114,35 @@ export async function handleApi(req, env, fetcher = fetch) {
       if (!order || (order.campaignId && Number(order.campaignId) !== campaign)) throw new ApiError('Заказ не найден в выбранном магазине.', 404);
       return order;
     }
+    const store=env.DB?new Inventory(env):null;
+    if(route.startsWith('/api/pool/')||route.startsWith('/api/ledger')){
+      if(!store)throw new StoreError('Онлайн-хранилище ещё не подключено. См. SETUP.md.',503);
+      if(route==='/api/pool/categories'&&req.method==='GET')return json({categories:await store.categories()});
+      if(route==='/api/pool/categories'&&req.method==='POST')return json(await store.saveCategory(await body(req)));
+      if(route==='/api/pool/items'&&req.method==='GET')return json(await store.list(p));
+      if(route==='/api/pool/items'&&req.method==='POST')return json(await store.saveItems(await body(req)));
+      if(route==='/api/pool/reveal'&&req.method==='POST')return json(await store.reveal((await body(req)).id));
+      if(route==='/api/pool/edit'&&req.method==='POST')return json(await store.edit(await body(req)));
+      if(route==='/api/pool/prepare'&&req.method==='POST'){
+        const input=await body(req),order=await findOrder(input.orderId);
+        if(order.status!=='PROCESSING'||order.delivery?.type!=='DIGITAL'||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))throw new ApiError('Автовыдача доступна только для цифровых кодов в обработке.',409);
+        const payload=await store.prepare(order);
+        try{validateDelivery(payload,order);}catch(e){await store.release({orderId:payload.orderId});throw e;}
+        return json(payload);
+      }
+      if(route==='/api/pool/release'&&req.method==='POST')return json(await store.release(await body(req)));
+      if(route==='/api/ledger'&&req.method==='GET')return json(await store.ledger(p));
+      if(route==='/api/ledger/secrets'&&req.method==='POST')return json(await store.orderSecrets(String((await body(req)).orderId)));
+      if(route==='/api/ledger/payout'&&req.method==='POST')return json(await store.payout(await body(req)));
+      if(route==='/api/ledger/prepared'&&req.method==='GET')return json({delivery:await store.prepared(p.get('orderId'))});
+      if(route==='/api/ledger/audit'&&req.method==='GET')return json({events:(await store.q('SELECT * FROM audit WHERE entity_id=? ORDER BY id DESC LIMIT 100',p.get('id')||'').all()).results});
+      if(route==='/api/ledger/status'&&req.method==='GET')return json({automation:env.AUTO_DELIVERY==='true',marketKeyConfigured:!!env.YANDEX_API_KEY,sheetsConfigured:(!!env.GOOGLE_APPS_SCRIPT_URL&&!!env.SHEETS_SYNC_SECRET)||(!!env.GOOGLE_SHEET_ID&&!!env.GOOGLE_SERVICE_ACCOUNT_JSON),events:(await store.q("SELECT * FROM audit WHERE entity_id='automation' ORDER BY id DESC LIMIT 10").all()).results});
+    }
     if (route === '/api/config' && req.method === 'GET') {
       const token = await market('/v2/auth/token', {});
       const scopes = token.result?.apiKey?.authScopes || [];
       const all = scopes.includes('ALL_METHODS');
-      return json({businessId: business, campaignId: campaign, canDeliver: all || scopes.includes('INVENTORY_AND_ORDER_PROCESSING'), canChat: all || scopes.includes('COMMUNICATION'), canReadChat: all || scopes.includes('COMMUNICATION') || scopes.includes('ALL_METHODS_READ_ONLY')});
+      return json({businessId: business, campaignId: campaign, inventoryEnabled:!!store, canDeliver: all || scopes.includes('INVENTORY_AND_ORDER_PROCESSING'), canChat: all || scopes.includes('COMMUNICATION'), canReadChat: all || scopes.includes('COMMUNICATION') || scopes.includes('ALL_METHODS_READ_ONLY')});
     }
     if (['/api/orders', '/api/history'].includes(route) && req.method === 'GET') {
       const query = cursor(p, 50), filter = {campaignIds: [campaign], fake: p.get('fake') === 'true'};
@@ -135,6 +160,7 @@ export async function handleApi(req, env, fetcher = fetch) {
         }
       }
       const data = await market(`/v1/businesses/${business}/orders?${query}`, filter);
+      if(store)await store.recordOrders(data.orders||[]);
       return json({orders: (data.orders || []).filter(o => o.delivery?.type === 'DIGITAL'), nextPageToken: data.paging?.nextPageToken || null});
     }
     if (route === '/api/buyer' && req.method === 'GET') {
@@ -146,8 +172,26 @@ export async function handleApi(req, env, fetcher = fetch) {
     if (route === '/api/deliver' && req.method === 'POST') {
       const input = await body(req);
       const order = await findOrder(input.orderId);
-      const items = validateDelivery(input, order);
-      await market(`/v2/campaigns/${campaign}/orders/${id(input.orderId)}/deliverDigitalGoods`, {items}, true);
+      if(env.POOL_REQUIRED==='true'&&!store)throw new StoreError('Подключите базу данных перед выдачей.',503);
+      let payload=input;
+      if(store){
+        let prepared=await store.prepared(input.orderId);
+        if(prepared&&input.items)throw new StoreError('У заказа уже есть сохранённая выдача. Откройте её в разделе «Учёт заказов».',409);
+        if(!prepared){validateDelivery(input,order);await store.prepare(order,input.items);prepared=await store.prepared(input.orderId);}
+        payload=prepared.payload;
+      }
+      const items = validateDelivery(payload, order);
+      if(store)await store.claim(input.orderId);
+      try{
+        await market(`/v2/campaigns/${campaign}/orders/${id(input.orderId)}/deliverDigitalGoods`, {items}, true);
+      }catch(e){
+        if(store)await store.outcome(input.orderId,e.uncertain?'uncertain':'rejected');
+        throw e;
+      }
+      if(store){
+        try{await store.outcome(input.orderId,'accepted');}
+        catch{throw new ApiError('Маркет принял данные, но запись результата не подтверждена. Не повторяйте выдачу; дождитесь сверки статуса.',502,true);}
+      }
       return json({ok: true, message: 'Маркет принял ключи. Дождитесь статуса «Доставлен» в истории — он обновится не сразу.'});
     }
     if (route === '/api/chats' && req.method === 'GET') {
@@ -174,6 +218,6 @@ export async function handleApi(req, env, fetcher = fetch) {
     }
     throw new ApiError('Метод не найден.', 404);
   } catch (error) {
-    return json({error: error instanceof ApiError ? error.message : 'Не удалось обработать запрос.', uncertain: !!error.uncertain}, error instanceof ApiError ? error.status : 500);
+    return json({error: error instanceof ApiError || error instanceof StoreError ? error.message : 'Не удалось обработать запрос.', uncertain: !!error.uncertain}, error instanceof ApiError || error instanceof StoreError ? error.status : 500);
   }
 }

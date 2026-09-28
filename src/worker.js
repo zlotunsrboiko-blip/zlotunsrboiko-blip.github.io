@@ -1,5 +1,7 @@
 import {handleApi, securityHeaders} from './api.js';
+import {runAutomation} from './automation.js';
 export default {
+  async scheduled(event,env,ctx){ctx.waitUntil(runAutomation({...env,REQUIRE_PASSWORD:'true'}));},
   async fetch(request, env) {
     if (new URL(request.url).pathname.startsWith('/api/')) {
       const origin = request.headers.get('Origin');
