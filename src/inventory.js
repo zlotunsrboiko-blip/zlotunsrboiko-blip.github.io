@@ -138,8 +138,9 @@ export class Inventory {
   }
   async orderSecrets(id){
     const units=(await this.q('SELECT * FROM delivery_units WHERE order_id=? ORDER BY item_id,unit_index',id).all()).results,key=await this.key();
+    const delivery=await this.prepared(id);
     await this.audit(id,'order_secrets_viewed');
-    return {units:await Promise.all(units.map(async u=>({...u,secret:await unseal(key,u.secret)})))};
+    return {units:await Promise.all(units.map(async u=>({...u,secret:await unseal(key,u.secret)}))),instructions:(delivery?.payload?.items||[]).map(item=>({itemId:String(item.id),slip:item.slip||'',activateTill:item.activate_till||''}))};
   }
   async payout(input){
     const result=await this.q('UPDATE orders SET payout_kopecks=?,updated_at=? WHERE id=?',kopecks(input.payout),now(),String(input.orderId)).run();

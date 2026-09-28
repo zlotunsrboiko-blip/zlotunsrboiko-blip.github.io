@@ -238,22 +238,20 @@ async function ledgerDetails(order){
     const result=await post('/api/ledger/secrets',{orderId:order.id}),d=dialog(`Заказ № ${order.id}`);
     d.append(el('p','hint',`Создан ${formatDate(order.created_at)}. ${poolLabels[order.delivery_state]||'Данные выдачи пока отсутствуют'}.`));
     d.append(dataTable(['Позиция','Единица','Логин / CDK','Пароль','2FA'],result.units.map(u=>[u.item_id,u.unit_index+1,u.secret.login||u.secret.code,u.secret.password,u.secret.twoFactor])));
+    if(result.instructions?.length){d.append(el('h3','','Инструкция, отправленная покупателю'));for(const item of result.instructions){const block=el('section','instruction-block'),pre=el('pre','secret-block',item.slip||'Инструкция отсутствует');block.append(el('p','hint',`Позиция ${item.itemId}${item.activateTill?` · Активировать до ${item.activateTill}`:''}`),pre);d.append(block);}}
     if(['prepared','rejected'].includes(order.delivery_state)){
       d.append(el('p','hint',order.delivery_state==='prepared'?'Автовыдача отправит эти данные сама в течение минуты. Кнопка ниже нужна только как аварийный запуск.':'Маркет ранее отклонил отправку. Проверьте данные перед повторным запуском.'));
       d.append(button('Аварийно отправить сейчас',async()=>{if(!confirm('Отправить эти данные покупателю сейчас?'))return;try{await post('/api/deliver',{orderId:order.id});d.close();await loadLedger();}catch(e){toast(e.message);}},'button primary'));
       d.append(button('Освободить резерв для исправления',async()=>{try{await post('/api/pool/release',{orderId:order.id});d.close();await loadLedger();}catch(e){toast(e.message);}}));
     }
     if(['uncertain','sending'].includes(order.delivery_state))d.append(el('p','error-text','Результат отправки требует проверки в Маркете. Товар остаётся в резерве; повторная автоматическая выдача отключена для этого заказа.'));
-    const payout=field('Фактическая выплата после комиссии, ₽','input',{inputMode:'decimal',value:order.payout_kopecks==null?'':String(order.payout_kopecks/100),placeholder:'Пока неизвестна'});
-    d.append(el('p','hint','Укажите сумму из финансового отчёта Маркета. Цена заказа не подставляется вместо выплаты. Пустое поле означает, что выплата ещё не сверена.'));
-    submitForm(d,[payout],async()=>{await post('/api/ledger/payout',{orderId:order.id,payout:payout.input.value});await loadLedger();},'Сохранить выплату');
   }catch(e){notice(e.message);}
 }
 async function loadLedger(more=false){
   const generation=++ledgerGeneration;try{
     if(!more)ledgerOffset=0;
     const result=await api('/api/ledger?'+new URLSearchParams({orderId:$('#ledger-search').value.trim(),offset:String(ledgerOffset)}));if(generation!==ledgerGeneration)return;
-    if(!more)$('#ledger-table').replaceChildren();$('#ledger-table').append(dataTable(['№ заказа','Дата','Маркет','Выдача','Единиц','Цена заказа','После комиссий','Данные'],result.orders.map(o=>[o.id,formatDate(o.created_at),labels[o.status]||o.status,poolLabels[o.delivery_state]||'Не выдавался сервисом',o.units,rub(o.amount_kopecks),rub(o.payout_kopecks),button('Открыть',()=>ledgerDetails(o),'button quiet')])));
+    if(!more)$('#ledger-table').replaceChildren();$('#ledger-table').append(dataTable(['№ заказа','Дата','Маркет','Выдача','Единиц','Цена заказа','Данные'],result.orders.map(o=>[o.id,formatDate(o.created_at),labels[o.status]||o.status,poolLabels[o.delivery_state]||'Не выдавался сервисом',o.units,rub(o.amount_kopecks),button('Открыть',()=>ledgerDetails(o),'button quiet')])));
     if(!result.total)$('#ledger-table').replaceChildren(el('p','empty','Заказы появятся после синхронизации с Маркетом.'));$('#ledger-more').hidden=result.nextOffset===null;ledgerOffset=result.nextOffset;
     const status=await api('/api/ledger/status');if(generation!==ledgerGeneration)return;
     $('#automation-status').textContent=`Автовыдача: ${status.automation?'включена':'выключена'} · Ключ на сервере: ${status.marketKeyConfigured?'настроен':'не задан'} · Google Таблицы: ${status.sheetsConfigured?'настроены':'не подключены'}${status.sheetsLastSuccess?` · Последнее обновление: ${formatDate(status.sheetsLastSuccess)}`:''}`;

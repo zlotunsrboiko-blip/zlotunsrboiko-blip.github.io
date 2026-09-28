@@ -38,6 +38,7 @@ test('available or blocked stock can be deleted, but order history stock cannot'
 test('prepare snapshots and reserves atomically; send only once and expose separate payout',async()=>{
   const {env,store,api,mock}=await setup(),orderId=84729105;
   assert.equal((await api('/api/pool/prepare',{orderId})).status,200);
+  const details=await store.orderSecrets(String(orderId));assert.equal(details.instructions[0].slip,'Инструкция');assert.equal(details.instructions[0].activateTill,'2030-12-31');
   const reserved=await store.q("SELECT * FROM inventory WHERE status='reserved'").first();
   assert.ok(reserved);await assert.rejects(store.edit({id:reserved.id}),/нельзя перезаписать/);
   assert.equal((await api('/api/pool/prepare',{orderId})).status,409);
