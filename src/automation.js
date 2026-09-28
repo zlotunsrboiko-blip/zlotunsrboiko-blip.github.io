@@ -1,6 +1,7 @@
 import {handleApi} from './api.js';
-import {Inventory} from './inventory.js';
+import {Inventory,deliveryText} from './inventory.js';
 import {syncSheets} from './sheets.js';
+import {supplierBuy,parseSupplierCredential} from './supplier.js';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 const reason=error=>String(error?.message||'Неизвестная ошибка').replace(/\s+/g,' ').slice(0,300);
 export async function runAutomation(env,fetcher=fetch){
@@ -17,13 +18,27 @@ export async function runAutomation(env,fetcher=fetch){
   }
   try{
     const seen=new Set();
+    async function prepareOrder(order){
+      const external=[];
+      for(const item of order.items||[]){
+        const quantity=Number(item.count??item.quantity),category=await store.categoryByOffer(item.offerId||'');
+        if(!category)continue;
+        const stock=await store.q("SELECT COUNT(*) AS count FROM inventory WHERE category_id=? AND kind=? AND status='available'",category.id,category.item_kind).first();
+        if(Number(stock.count)>=quantity||!category.supplier_enabled)continue;
+        const bought=await supplierBuy(env,{productId:category.supplier_product_id,quantity,idempotencyKey:`ym-${order.id??order.orderId}-${item.id}`},fetcher);
+        const secrets=bought.texts.map(value=>parseSupplierCredential(category.item_kind,value));
+        external.push({id:item.id,codes:secrets.map(deliveryText),secrets,slip:category.slip,activate_till:category.activate_till});
+        await store.audit(String(order.id??order.orderId),`supplier_purchased:order=${bought.supplierOrderId},product=${category.supplier_product_id},qty=${quantity}${bought.idempotentReplay?',replay=true':''}`);
+      }
+      return store.prepare(order,external.length?external:null);
+    }
     async function processOrder(order){
       if(!enabled(env.AUTO_DELIVERY)||order.fake||order.status!=='PROCESSING'||!['ACTIVATION_CODE','EMAIL'].includes(order.delivery?.digitalGoods?.type))return;
       const id=String(order.id??order.orderId);if(seen.has(id))return;seen.add(id);
       try{
         const saved=await store.prepared(id);
         if(saved&&saved.state!=='prepared')return;
-        if(!saved)await api('/api/pool/prepare',{orderId:id});
+        if(!saved)await prepareOrder(order);
         await api('/api/deliver',{orderId:id});delivered++;
       }catch(error){failures++;await store.audit(id,`auto_delivery_failed:${reason(error)}`);}
     }

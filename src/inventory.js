@@ -48,11 +48,15 @@ export class Inventory {
   q(sql,...args){return this.db.prepare(sql).bind(...args);}
   async key(){return this._key ||= await cipherKey(this.env);}
   async audit(id,action){return this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,action,now()).run();}
-  async categories(){return (await this.q(`SELECT c.*, SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END) AS available,
+  async categories(){await this.loadSupplierConfigs();return (await this.q(`SELECT c.*, SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END) AS available,
     SUM(CASE WHEN i.status='reserved' THEN 1 ELSE 0 END) AS reserved,
     SUM(CASE WHEN i.status='sold' THEN 1 ELSE 0 END) AS sold,
     SUM(CASE WHEN i.status='blocked' THEN 1 ELSE 0 END) AS blocked
-    FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results;}
+    FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results.map(c=>({...c,...this._supplier(c.id)}));}
+  _supplierValue=new Map();
+  _supplier(id){return this._supplierValue.get(id)||{supplier_enabled:false,supplier_product_id:null};}
+  async loadSupplierConfigs(){const rows=(await this.q("SELECT name,value FROM jobs WHERE name LIKE 'supplier:%'").all()).results;this._supplierValue.clear();for(const row of rows){try{const value=JSON.parse(row.value);this._supplierValue.set(row.name.slice(9),{supplier_enabled:value.enabled===true,supplier_product_id:value.productId||null});}catch{}}}
+  async categoryByOffer(offer){await this.loadSupplierConfigs();const row=await this.q('SELECT * FROM categories WHERE offer_id=?',offer).first();return row?{...row,...this._supplier(row.id)}:null;}
   async saveCategory(input){
     const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(input.activateTill,'Срок активации',10,true),kind=input.kind||'account';
     if(!['account','code'].includes(kind))throw new StoreError('Выберите тип товара: аккаунт или CDK.');
@@ -61,7 +65,10 @@ export class Inventory {
     const exists=await this.q('SELECT id FROM categories WHERE offer_id=? AND id<>?',offer,id).first();
     if(exists)throw new StoreError('Этот артикул уже связан с другой категорией.',409);
     if(input.id){if(!(await this.q('SELECT id FROM categories WHERE id=?',id).first()))throw new StoreError('Категория не найдена.',404);if(await this.q('SELECT id FROM inventory WHERE category_id=? AND kind<>? LIMIT 1',id,kind).first())throw new StoreError('Тип категории нельзя изменить, пока в ней есть товары другого типа.',409);}
-    await this.db.batch([this.q('INSERT INTO categories(id,name,offer_id,item_kind,slip,activate_till,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,item_kind=excluded.item_kind,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,kind,slip,until,t,t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
+    const productId=input.supplierProductId===''||input.supplierProductId==null?null:Number(input.supplierProductId),supplierEnabled=input.supplierEnabled===true;
+    if(productId!==null&&(!Number.isSafeInteger(productId)||productId<1))throw new StoreError('Проверьте товар Technysoft.');
+    if(supplierEnabled&&!productId)throw new StoreError('Для автозакупки выберите товар Technysoft.');
+    await this.db.batch([this.q('INSERT INTO categories(id,name,offer_id,item_kind,slip,activate_till,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,item_kind=excluded.item_kind,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,kind,slip,until,t,t),this.q("INSERT INTO jobs(name,value,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",`supplier:${id}`,JSON.stringify({enabled:supplierEnabled,productId}),t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
     return {id};
   }
   async fingerprint(c){
@@ -160,9 +167,10 @@ export class Inventory {
     for(const item of order.items||[]){
       const count=Number(item.count??item.quantity);
       if(!Number.isInteger(count)||count<1||count>100)throw new StoreError('Для выдачи через пул допустимо до 100 единиц в позиции.');
-      if(manualItems){
-        const manual=manualItems.find(x=>x.id===item.id);items.push(manual);
-        for(let i=0;i<manual.codes.length;i++)units.push({itemId:String(item.id),index:i,inventoryId:null,secret:await seal(key,{kind:'manual',code:manual.codes[i]})});
+      const manual=manualItems?.find(x=>x.id===item.id);
+      if(manual){
+        items.push({id:manual.id,codes:manual.codes,slip:manual.slip,activate_till:manual.activate_till});
+        for(let i=0;i<manual.codes.length;i++)units.push({itemId:String(item.id),index:i,inventoryId:null,secret:await seal(key,manual.secrets?.[i]||{kind:'manual',code:manual.codes[i]})});
       }else{
         const category=await this.q('SELECT * FROM categories WHERE offer_id=?',item.offerId||'').first();
         if(!category)throw new StoreError(`Нет категории для артикула ${item.offerId||item.id}.`);

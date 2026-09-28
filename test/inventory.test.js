@@ -96,6 +96,16 @@ test('background finds an order through history when the processing list lags',a
   assert.equal(mock.calls.filter(c=>c.path.endsWith('/deliverDigitalGoods')).length,1);
   assert.equal((await store.prepared(84729105)).state,'accepted');env.DB.close();
 });
+test('background buys missing account once from configured supplier and delivers it',async()=>{
+  const {env,store,mock,category}=await setup();env.MKE_API_KEY='supplier-key';
+  await store.q("UPDATE inventory SET status='blocked'").run();
+  await store.saveCategory({id:category.id,name:'Подписки',kind:'account',offerId:'DIGITAL-84729105',slip:'Инструкция',activateTill:'2030-12-31',supplierProductId:12,supplierEnabled:true});
+  let buys=0;
+  const combined=async(url,options)=>{if(String(url).startsWith('https://api.technysoft.com')){buys++;assert.equal(options.headers['Idempotency-Key'],'ym-84729105-1');return Response.json({order:{id:501,product_id:12,quantity:1,status:'delivered',items:[{type:'text',content:'supplier-login|supplier-pass|supplier-2fa'}]},idempotent_replay:false});}return mock.fetcher(url,options);};
+  await runAutomation(env,combined);await runAutomation(env,combined);
+  assert.equal(buys,1);assert.equal((await store.prepared(84729105)).state,'accepted');
+  const details=await store.orderSecrets('84729105');assert.equal(details.units[0].secret.login,'supplier-login');assert.equal(mock.calls.filter(c=>c.path.endsWith('/deliverDigitalGoods')).length,1);env.DB.close();
+});
 test('multiple lines with same offer select distinct accounts and sheet totals are not duplicated',async()=>{
   const {env,store,mock}=await setup(),o=mock.orders[0];o.items.push({...o.items[0],id:2});await store.prepare(o);
   const prepared=await store.prepared(o.id);assert.notEqual(prepared.payload.items[0].codes[0],prepared.payload.items[1].codes[0]);

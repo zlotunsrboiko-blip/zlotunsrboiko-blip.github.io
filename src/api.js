@@ -1,4 +1,5 @@
 import {Inventory, StoreError} from './inventory.js';
+import {SupplierError,supplierAccount,supplierProducts} from './supplier.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
@@ -73,7 +74,7 @@ export function validateDelivery(input, order) {
 export async function handleApi(req, env, fetcher = fetch) {
   try {
     const url = new URL(req.url), p = url.searchParams, route = url.pathname;
-    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB};
+    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB,supplierConfigured:!!env.MKE_API_KEY};
     if (route === '/api/settings' && req.method === 'GET') return json({...settings,serverKeyConfigured:!!env.YANDEX_API_KEY});
     if (env.REQUIRE_PASSWORD === 'true' && (!env.APP_PASSWORD || env.APP_PASSWORD.length < 16)) throw new ApiError('В секретах хостинга нужно задать APP_PASSWORD длиной от 16 символов.', 503);
     if (req.headers.get('x-app-request') !== 'digital-goods') throw new ApiError('Откройте сервис в браузере.', 403);
@@ -114,6 +115,14 @@ export async function handleApi(req, env, fetcher = fetch) {
       const order = result.orders?.find(x => String(x.id ?? x.orderId) === String(orderId));
       if (!order || (order.campaignId && Number(order.campaignId) !== campaign)) throw new ApiError('Заказ не найден в выбранном магазине.', 404);
       return order;
+    }
+    if(route==='/api/supplier/status'&&req.method==='GET'){
+      if(!env.MKE_API_KEY)return json({configured:false});
+      const account=await supplierAccount(env,fetcher);return json({configured:true,balance:account.balance,currency:account.currency});
+    }
+    if(route==='/api/supplier/products'&&req.method==='GET'){
+      if(!env.MKE_API_KEY)return json({configured:false,products:[]});
+      const products=await supplierProducts(env,fetcher);return json({configured:true,products:products.map(x=>({id:x.id,name:x.name_en,price:x.price_usd,stock:x.stock,instant:x.instant,activationUrl:x.activation_url}))});
     }
     const store=env.DB?new Inventory(env):null;
     if(route.startsWith('/api/pool/')||route.startsWith('/api/ledger')){
@@ -225,6 +234,7 @@ export async function handleApi(req, env, fetcher = fetch) {
     }
     throw new ApiError('Метод не найден.', 404);
   } catch (error) {
-    return json({error: error instanceof ApiError || error instanceof StoreError ? error.message : 'Не удалось обработать запрос.', uncertain: !!error.uncertain}, error instanceof ApiError || error instanceof StoreError ? error.status : 500);
+    const known=error instanceof ApiError||error instanceof StoreError||error instanceof SupplierError;
+    return json({error:known?error.message:'Не удалось обработать запрос.', uncertain: !!error.uncertain},known?error.status:500);
   }
 }
