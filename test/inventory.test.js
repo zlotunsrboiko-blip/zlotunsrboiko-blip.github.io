@@ -35,6 +35,16 @@ test('available or blocked stock can be deleted, but order history stock cannot'
   const reserved=await store.q("SELECT id,version FROM inventory WHERE status='reserved'").first();
   await assert.rejects(store.remove(reserved),/историей заказа/);env.DB.close();
 });
+test('reusable category keeps one link available for every order',async()=>{
+  const {env,store,mock}=await setup();
+  const category=await store.saveCategory({name:'Универсальная ссылка',kind:'code',offerId:'UNIVERSAL-LINK',slip:'Откройте ссылку.',activateTill:'2036-12-31',reusable:true});
+  await store.saveItems({categoryId:category.id,items:[{kind:'code',code:'https://drive.google.com/example'}]});
+  await assert.rejects(store.saveItems({categoryId:category.id,items:[{kind:'code',code:'SECOND'}]}),/только один товар/);
+  const first={...mock.orders[0],id:9001,items:[{...mock.orders[0].items[0],offerId:'UNIVERSAL-LINK',count:2}]};
+  const second={...mock.orders[0],id:9002,items:[{...mock.orders[0].items[0],offerId:'UNIVERSAL-LINK',count:1}]};
+  const a=await store.prepare(first),b=await store.prepare(second);assert.equal(new Set(a.items[0].codes).size,2);assert.ok(a.items[0].codes.every(x=>x.includes('drive.google.com/example')));assert.equal(b.items[0].codes[0],'https://drive.google.com/example');
+  const item=await store.q('SELECT status,order_id FROM inventory WHERE category_id=?',category.id).first();assert.equal(item.status,'available');assert.equal(item.order_id,null);env.DB.close();
+});
 test('prepare snapshots and reserves atomically; send only once and expose separate payout',async()=>{
   const {env,store,api,mock}=await setup(),orderId=84729105;
   assert.equal((await api('/api/pool/prepare',{orderId})).status,200);
