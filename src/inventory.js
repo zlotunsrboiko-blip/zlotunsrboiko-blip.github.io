@@ -54,24 +54,28 @@ export class Inventory {
     SUM(CASE WHEN i.status='blocked' THEN 1 ELSE 0 END) AS blocked
     FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results.map(c=>({...c,...this._supplier(c.id)}));}
   _supplierValue=new Map();
-  _supplier(id){return this._supplierValue.get(id)||{supplier_enabled:false,supplier_product_id:null,reusable:false};}
-  async loadSupplierConfigs(){const rows=(await this.q("SELECT name,value FROM jobs WHERE name LIKE 'supplier:%'").all()).results;this._supplierValue.clear();for(const row of rows){try{const value=JSON.parse(row.value);this._supplierValue.set(row.name.slice(9),{supplier_enabled:value.enabled===true,supplier_product_id:value.productId||null,reusable:value.reusable===true});}catch{}}}
+  _supplier(id){return this._supplierValue.get(id)||{supplier_enabled:false,supplier_provider:'mke',supplier_product_id:null,reusable:false};}
+  async loadSupplierConfigs(){const rows=(await this.q("SELECT name,value FROM jobs WHERE name LIKE 'supplier:%'").all()).results;this._supplierValue.clear();for(const row of rows){try{const value=JSON.parse(row.value);this._supplierValue.set(row.name.slice(9),{supplier_enabled:value.enabled===true,supplier_provider:value.provider||'mke',supplier_product_id:value.productId||null,reusable:value.reusable===true});}catch{}}}
   async categoryByOffer(offer){await this.loadSupplierConfigs();const row=await this.q('SELECT * FROM categories WHERE offer_id=?',offer).first();return row?{...row,...this._supplier(row.id)}:null;}
   async saveCategory(input){
     const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(input.activateTill,'Срок активации',10,true),kind=input.kind||'account';
     if(!['account','code'].includes(kind))throw new StoreError('Выберите тип товара: аккаунт или CDK.');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(until)||!Number.isFinite(Date.parse(until))||new Date(until).toISOString().slice(0,10)!==until)throw new StoreError('Проверьте срок активации.');
+    if(until<now().slice(0,10))throw new StoreError('Срок активации уже истёк. Укажите будущую дату, иначе выдача будет заблокирована.');
     const t=now();
     const exists=await this.q('SELECT id FROM categories WHERE offer_id=? AND id<>?',offer,id).first();
     if(exists)throw new StoreError('Этот артикул уже связан с другой категорией.',409);
     if(input.id){if(!(await this.q('SELECT id FROM categories WHERE id=?',id).first()))throw new StoreError('Категория не найдена.',404);if(await this.q('SELECT id FROM inventory WHERE category_id=? AND kind<>? LIMIT 1',id,kind).first())throw new StoreError('Тип категории нельзя изменить, пока в ней есть товары другого типа.',409);}
-    const productId=input.supplierProductId===''||input.supplierProductId==null?null:Number(input.supplierProductId),supplierEnabled=input.supplierEnabled===true,reusable=input.reusable===true;
-    if(productId!==null&&(!Number.isSafeInteger(productId)||productId<1))throw new StoreError('Проверьте товар Technysoft.');
-    if(supplierEnabled&&!productId)throw new StoreError('Для автозакупки выберите товар Technysoft.');
+    await this.loadSupplierConfigs();
+    const provider=input.supplierProvider||this._supplier(id).supplier_provider||'mke';
+    if(!['mke','roboticvn'].includes(provider))throw new StoreError('Выберите MKE SHOP или ROBOTICVN SHOP.');
+    const productId=input.supplierProductId===''||input.supplierProductId==null?null:provider==='mke'?Number(input.supplierProductId):String(input.supplierProductId),supplierEnabled=input.supplierEnabled===true,reusable=input.reusable===true;
+    if(productId!==null&&(provider==='mke'?(!Number.isSafeInteger(productId)||productId<1):(!/^rvn:[^:]+:[^:]+:(usd|vnd)$/.test(productId)||productId.length>1000)))throw new StoreError('Проверьте выбранный товар поставщика.');
+    if(supplierEnabled&&!productId)throw new StoreError('Для автозакупки выберите товар поставщика.');
     if(reusable&&kind!=='code')throw new StoreError('Универсальный товар должен быть ссылкой или текстом типа CDK.');
     if(reusable&&supplierEnabled)throw new StoreError('Универсальный товар хранится в пуле и не требует автозакупки.');
     if(reusable&&(await this.q('SELECT COUNT(*) AS total FROM inventory WHERE category_id=?',id).first()).total>1)throw new StoreError('Сначала оставьте в категории только один товар.',409);
-    await this.db.batch([this.q('INSERT INTO categories(id,name,offer_id,item_kind,slip,activate_till,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,item_kind=excluded.item_kind,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,kind,slip,until,t,t),this.q("INSERT INTO jobs(name,value,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",`supplier:${id}`,JSON.stringify({enabled:supplierEnabled,productId,reusable}),t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
+    await this.db.batch([this.q('INSERT INTO categories(id,name,offer_id,item_kind,slip,activate_till,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,offer_id=excluded.offer_id,item_kind=excluded.item_kind,slip=excluded.slip,activate_till=excluded.activate_till,updated_at=excluded.updated_at',id,name,offer,kind,slip,until,t,t),this.q("INSERT INTO jobs(name,value,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",`supplier:${id}`,JSON.stringify({enabled:supplierEnabled,provider,productId,reusable}),t),this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'category_saved',t)]);
     return {id};
   }
   async fingerprint(c){
@@ -99,9 +103,16 @@ export class Inventory {
   async list(params){
     const category=params.get('category')||'',status=params.get('status')||'',offset=Number(params.get('offset')||0);
     if(!Number.isSafeInteger(offset)||offset<0)throw new StoreError('Некорректная страница.');
-    const where='WHERE (?=\'\' OR i.category_id=?) AND (?=\'\' OR i.status=?)';
-    const rows=(await this.q(`SELECT i.id,i.category_id,c.name AS category,i.kind,i.status,i.order_id,i.created_at,i.updated_at,i.version FROM inventory i JOIN categories c ON c.id=i.category_id ${where} ORDER BY i.created_at DESC,i.id LIMIT 100 OFFSET ?`,category,category,status,status,offset).all()).results;
-    const count=await this.q(`SELECT COUNT(*) AS total FROM inventory i ${where}`,category,category,status,status).first();
+    const modes=params.has('modes')?params.get('modes').split(',').filter(Boolean):['unique','reusable'];
+    const providers=params.has('providers')?params.get('providers').split(',').filter(Boolean):['local','mke','roboticvn'];
+    if(modes.some(x=>!['unique','reusable'].includes(x))||providers.some(x=>!['local','mke','roboticvn'].includes(x)))throw new StoreError('Неизвестный фильтр пула.');
+    if(!modes.length||!providers.length)return {items:[],total:0,nextOffset:null};
+    const categoryIds=(await this.categories()).filter(c=>modes.includes(c.reusable?'reusable':'unique')&&providers.includes(c.supplier_enabled&&!c.reusable?c.supplier_provider:'local')).map(c=>c.id);
+    if(!categoryIds.length)return {items:[],total:0,nextOffset:null};
+    const where=`WHERE (?='' OR i.category_id=?) AND (?='' OR i.status=?) AND i.category_id IN (SELECT value FROM json_each(?))`;
+    const args=[category,category,status,status,JSON.stringify(categoryIds)];
+    const rows=(await this.q(`SELECT i.id,i.category_id,c.name AS category,i.kind,i.status,i.order_id,i.created_at,i.updated_at,i.version FROM inventory i JOIN categories c ON c.id=i.category_id ${where} ORDER BY i.created_at DESC,i.id LIMIT 100 OFFSET ?`,...args,offset).all()).results;
+    const count=await this.q(`SELECT COUNT(*) AS total FROM inventory i ${where}`,...args).first();
     return {items:rows,total:count.total,nextOffset:offset+rows.length<count.total?offset+rows.length:null};
   }
   async reveal(id){

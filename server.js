@@ -35,7 +35,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     env.DATA_ENCRYPTION_KEY=Buffer.alloc(32,7).toString('base64');
     const {Inventory}=await import('./src/inventory.js');const store=new Inventory(env);
     for(const [offerId,name,count] of [['DIGITAL-84729105','Подписка · 1 месяц',4],['DIGITAL-84729083','Сертификаты',5]]){
-      const c=await store.saveCategory({name,offerId,slip:'Демонстрационная инструкция. Все данные вымышлены.',activateTill:'2030-12-31'});
+      const c=await store.saveCategory({name,offerId,kind:'code',slip:'Демонстрационная инструкция. Все данные вымышлены.',activateTill:'2030-12-31'});
       await store.saveItems({categoryId:c.id,items:Array.from({length:count},(_,i)=>({kind:'code',code:`DEMO-${offerId}-${i+1}`}))});
     }
   }

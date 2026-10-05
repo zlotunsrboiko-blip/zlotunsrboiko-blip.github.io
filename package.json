@@ -1,6 +1,17 @@
 {
-  "name": "yandex-market-digital-goods", "version": "3.0.0", "private": true,
-  "type": "module", "description": "Цифровые заказы, история и переписка Яндекс Маркета",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node server.js", "demo": "node server.js --demo", "build": "node scripts/build-pages.mjs", "test": "node --test", "check": "node --check server.js && node --check src/api.js && node --check src/inventory.js && node --check src/automation.js && node --check src/supplier.js && node --check src/sheets.js && node --check public/app.js && node --check public/pool.js"}
+  "name": "yandex-market-digital-goods",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Цифровые заказы, история и переписка Яндекс Маркета",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node server.js --demo",
+    "build": "node scripts/build-pages.mjs",
+    "test": "node --test",
+    "check": "node --check server.js && node --check src/api.js && node --check src/inventory.js && node --check src/automation.js && node --check src/supplier.js && node --check src/sheets.js && node --check public/app.js && node --check public/pool.js && node --check src/roboticvn.js && node --check src/procurement.js"
+  }
 }

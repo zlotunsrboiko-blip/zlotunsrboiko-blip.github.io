@@ -1,5 +1,6 @@
 import {Inventory, StoreError} from './inventory.js';
 import {SupplierError,supplierAccount,supplierProducts} from './supplier.js';
+import {roboticAccount,roboticProducts} from './roboticvn.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
@@ -74,7 +75,7 @@ export function validateDelivery(input, order) {
 export async function handleApi(req, env, fetcher = fetch) {
   try {
     const url = new URL(req.url), p = url.searchParams, route = url.pathname;
-    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB,supplierConfigured:!!env.MKE_API_KEY};
+    const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB,supplierConfigured:!!(env.MKE_API_KEY||env.ROBOTICVN_API_KEY)};
     if (route === '/api/settings' && req.method === 'GET') return json({...settings,serverKeyConfigured:!!env.YANDEX_API_KEY});
     if (env.REQUIRE_PASSWORD === 'true' && (!env.APP_PASSWORD || env.APP_PASSWORD.length < 16)) throw new ApiError('В секретах хостинга нужно задать APP_PASSWORD длиной от 16 символов.', 503);
     if (req.headers.get('x-app-request') !== 'digital-goods') throw new ApiError('Откройте сервис в браузере.', 403);
@@ -117,12 +118,21 @@ export async function handleApi(req, env, fetcher = fetch) {
       return order;
     }
     if(route==='/api/supplier/status'&&req.method==='GET'){
-      if(!env.MKE_API_KEY)return json({configured:false});
-      const account=await supplierAccount(env,fetcher);return json({configured:true,balance:account.balance,currency:account.currency});
+      const provider=p.get('provider')||'mke';
+      if(!['mke','roboticvn'].includes(provider))throw new ApiError('Неизвестный поставщик.');
+      if(!(provider==='mke'?env.MKE_API_KEY:env.ROBOTICVN_API_KEY))return json({configured:false,provider});
+      const account=provider==='mke'?await supplierAccount(env,fetcher):await roboticAccount(env,fetcher);
+      return json({configured:true,provider,balance:account.balance,currency:account.currency,balances:account.balances||[{balance:account.balance,currency:account.currency}],checkedAt:new Date().toISOString()});
     }
     if(route==='/api/supplier/products'&&req.method==='GET'){
-      if(!env.MKE_API_KEY)return json({configured:false,products:[]});
-      const products=await supplierProducts(env,fetcher);return json({configured:true,products:products.map(x=>({id:x.id,name:x.name_en,price:x.price_usd,stock:x.stock,instant:x.instant,activationUrl:x.activation_url}))});
+      const provider=p.get('provider')||'mke';
+      if(!['mke','roboticvn'].includes(provider))throw new ApiError('Неизвестный поставщик.');
+      if(!(provider==='mke'?env.MKE_API_KEY:env.ROBOTICVN_API_KEY))return json({configured:false,provider,products:[]});
+      if(provider==='roboticvn'){
+        const offset=Number(p.get('offset')||0);if(!Number.isSafeInteger(offset)||offset<0)throw new ApiError('Некорректная страница каталога.');
+        const catalog=await roboticProducts(env,fetcher,{offset,limit:15});return json({configured:true,provider,...catalog});
+      }
+      const products=await supplierProducts(env,fetcher);return json({configured:true,provider,nextOffset:null,products:products.map(x=>({id:x.id,name:x.name_en,price:x.price_usd,currency:'USD',stock:x.stock,instant:x.instant,activationUrl:x.activation_url}))});
     }
     const store=env.DB?new Inventory(env):null;
     if(route.startsWith('/api/pool/')||route.startsWith('/api/ledger')){

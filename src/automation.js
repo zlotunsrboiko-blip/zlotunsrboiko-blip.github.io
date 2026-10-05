@@ -1,7 +1,7 @@
 import {handleApi} from './api.js';
 import {Inventory,deliveryText} from './inventory.js';
 import {syncSheets} from './sheets.js';
-import {supplierBuy,parseSupplierCredential} from './supplier.js';
+import {procure} from './procurement.js';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 const reason=error=>String(error?.message||'Неизвестная ошибка').replace(/\s+/g,' ').slice(0,300);
 export async function runAutomation(env,fetcher=fetch){
@@ -14,21 +14,28 @@ export async function runAutomation(env,fetcher=fetch){
   let failures=0,delivered=0;
   async function api(path,data){
     const r=await handleApi(new Request('https://internal.local'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-App-Password':encodeURIComponent(env.APP_PASSWORD||'')},body:data===undefined?undefined:JSON.stringify(data)}),env,fetcher);
-    const result=await r.json();if(!r.ok)throw new Error('Internal operation failed');return result;
+    const result=await r.json();if(!r.ok)throw new Error(result.error||`Внутренняя операция отклонена (HTTP ${r.status}).`);return result;
   }
   try{
     const seen=new Set();
     async function prepareOrder(order){
-      const external=[];
+      const external=[],plans=[],remaining=new Map();
       for(const item of order.items||[]){
         const quantity=Number(item.count??item.quantity),category=await store.categoryByOffer(item.offerId||'');
-        if(!category)continue;
-        const stock=await store.q("SELECT COUNT(*) AS count FROM inventory WHERE category_id=? AND kind=? AND status='available'",category.id,category.item_kind).first();
-        if(Number(stock.count)>=quantity||!category.supplier_enabled)continue;
-        const bought=await supplierBuy(env,{productId:category.supplier_product_id,quantity,idempotencyKey:`ym-${order.id??order.orderId}-${item.id}`},fetcher);
-        const secrets=bought.texts.map(value=>parseSupplierCredential(category.item_kind,value));
-        external.push({id:item.id,codes:secrets.map(deliveryText),secrets,slip:category.slip,activate_till:category.activate_till});
-        await store.audit(String(order.id??order.orderId),`supplier_purchased:order=${bought.supplierOrderId},product=${category.supplier_product_id},qty=${quantity}${bought.idempotentReplay?',replay=true':''}`);
+        if(!category)throw new Error(`Нет категории для артикула ${item.offerId||item.id}.`);
+        if(!Number.isInteger(quantity)||quantity<1||quantity>100)throw new Error('Проверьте количество товара в заказе.');
+        if(category.activate_till<new Date().toISOString().slice(0,10))throw new Error(`Срок активации уже истёк. Исправьте дату категории «${category.name}».`);
+        if(!remaining.has(category.id)){const stock=await store.q("SELECT COUNT(*) AS count FROM inventory WHERE category_id=? AND kind=? AND status='available'",category.id,category.item_kind).first();remaining.set(category.id,Number(stock.count));}
+        const available=remaining.get(category.id);
+        // A previous purchase takes priority even if somebody has since restocked locally.
+        const purchase=await store.q('SELECT name FROM jobs WHERE name=?',`purchase:${order.id??order.orderId}:${item.id}`).first();
+        if(!purchase&&available>=(category.reusable?1:quantity)){if(!category.reusable)remaining.set(category.id,available-quantity);continue;}
+        if(!category.supplier_enabled||category.reusable)throw new Error(`В категории «${category.name}» недостаточно доступных товаров.`);
+        plans.push({item,quantity,category});
+      }
+      for(const {item,quantity,category} of plans){
+        const bought=await procure(store,env,{orderId:String(order.id??order.orderId),itemId:item.id,category,quantity},fetcher);
+        external.push({id:item.id,codes:bought.codes,secrets:bought.secrets,slip:category.slip,activate_till:category.activate_till});
       }
       return store.prepare(order,external.length?external:null);
     }
