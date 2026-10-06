@@ -23,8 +23,9 @@
         <label>API-ключ Маркета<input id="api-key" type="password" required autocomplete="off" spellcheck="false" placeholder="Вставьте ключ из кабинета продавца"></label>
         <div class="two-fields"><label>ID кабинета<input id="business-id" inputmode="numeric" pattern="[0-9]+" required></label><label>ID магазина<input id="campaign-id" inputmode="numeric" pattern="[0-9]+" required></label></div>
         <label id="password-field" hidden>Пароль сервиса<input id="app-password" type="password" autocomplete="current-password"></label>
-        <p class="hint">Ключ хранится только в памяти открытой страницы. При обновлении страницы его нужно ввести снова.</p>
-        <p id="login-error" class="error-text" role="alert"></p><button class="button primary wide" id="login-button">Открыть заказы</button>
+        <label id="remember-field" class="check" hidden><input id="remember-device" type="checkbox" checked> Запомнить это устройство на 30 дней</label>
+        <p class="hint" id="login-hint">Пароль и API-ключ не сохраняются в браузере. На общем устройстве снимите галочку. Кнопка «Выйти» удаляет сохранённый вход.</p>
+        <p id="login-error" class="error-text" role="alert"></p><button class="button primary wide" id="login-button" disabled>Открыть заказы</button>
       </form>
     </section>
     <div id="workspace" hidden>
@@ -103,12 +104,12 @@ function badge(status) { return el('span',`badge ${status==='DELIVERED'?'green':
 async function api(path, options={}) {
   const epoch=state.epoch,c=state.credentials||{};
   let response;
-  try { response=await fetch(window.serviceUrl(path),{...options,cache:'no-store',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-Market-Key':c.key||'','X-Business-Id':c.business||'','X-Campaign-Id':c.campaign||'','X-App-Password':encodeURIComponent(c.password||'')}}); }
+  try { response=await fetch(window.serviceUrl(path),{...options,cache:'no-store',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods',...(c.token?{Authorization:`Bearer ${c.token}`}:{'X-Market-Key':c.key||'','X-App-Password':encodeURIComponent(c.password||'')}),'X-Business-Id':c.business||'','X-Campaign-Id':c.campaign||''}}); }
   catch { const e=new Error(options.method==='POST'?'Связь прервалась. Проверьте результат в Маркете перед повторной отправкой.':'Сервер недоступен. Проверьте соединение.');e.uncertain=options.method==='POST';throw e; }
   if(epoch!==state.epoch)throw new Error('Вход завершён.');
   let data;
   try { data=await response.json(); } catch { const e=new Error('Не удалось прочитать ответ сервера. При отправке проверьте результат в Маркете перед повтором.');e.uncertain=options.method==='POST';throw e; }
-  if(!response.ok||data.error){const error=new Error(data.error||'Не удалось выполнить запрос.');error.uncertain=data.uncertain||(options.method==='POST'&&response.status>=500);throw error;}return data;
+  if(!response.ok||data.error){const error=new Error(data.error||'Не удалось выполнить запрос.');error.status=response.status;error.uncertain=data.uncertain||(options.method==='POST'&&response.status>=500);throw error;}return data;
 }
 function switchTab(tab) { document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===tab);if(b.dataset.tab===tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==`${tab}-panel`);notice(''); }
 function field(labelText, tag='input', props={}) {const label=el('label','',labelText),input=el(tag);Object.assign(input,props);label.append(input);return {label,input};}
@@ -178,17 +179,70 @@ $('#refresh-orders').addEventListener('click',()=>{if([...document.querySelector
 $('#test-orders').addEventListener('change',()=>{if([...document.querySelectorAll('#orders textarea')].some(x=>x.value)&&!confirm('Переключить заказы? Введённые данные будут очищены.')){$('#test-orders').checked=!$('#test-orders').checked;return;}loadOrders();});
 $('#more-orders').addEventListener('click',()=>loadOrders(true));$('#more-history').addEventListener('click',()=>loadHistory(true));$('#more-chats').addEventListener('click',()=>loadChats(true));
 $('#history-filter').addEventListener('submit',e=>{e.preventDefault();loadHistory();});$('#chat-filter').addEventListener('submit',e=>{e.preventDefault();loadChats();});$('#refresh-chats').addEventListener('click',()=>loadChats());
-$('#login-form').addEventListener('submit',async e=>{e.preventDefault();$('#login-button').disabled=true;$('#login-error').textContent='';state.credentials={key:$('#api-key').value.trim(),business:$('#business-id').value.trim(),campaign:$('#campaign-id').value.trim(),password:$('#app-password').value};try{state.permissions=await api('/api/config');$('#api-key').value='';$('#app-password').value='';$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;$('#account-label').textContent=`Магазин ${state.permissions.campaignId}`;await loadOrders();}catch(e){state.credentials=null;$('#login-error').textContent=e.message;}finally{$('#login-button').disabled=false;}});
-$('#logout').addEventListener('click',()=>{if(!confirm('Выйти? Неотправленные данные будут очищены.'))return;state.epoch++;state.credentials=null;location.reload();});
+let rememberAvailable=false;
+function savedSessionKey(){return 'digital-goods-session:'+new URL(window.serviceUrl('/api/session'),location.href).origin;}
+function forgetSavedSession(){try{localStorage.removeItem(savedSessionKey());}catch{}}
+function readSavedSession(){
+  try{const session=JSON.parse(localStorage.getItem(savedSessionKey())||'null');if(session&&/^[a-f0-9]{64}$/.test(session.token)&&Number.isFinite(session.expiresAt)&&session.expiresAt>Date.now())return session;}catch{}
+  forgetSavedSession();return null;
+}
+async function showWorkspace(){
+  $('#api-key').value='';$('#app-password').value='';$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;
+  $('#logout').title=state.credentials?.token?'Выйти и забыть это устройство':'Выйти';
+  $('#account-label').textContent=`Магазин ${state.permissions.campaignId}`;await loadOrders();
+}
+$('#login-form').addEventListener('submit',async e=>{
+  e.preventDefault();if($('#login-button').disabled)return;
+  $('#login-button').disabled=true;$('#login-error').textContent='';
+  state.credentials={key:$('#api-key').value.trim(),business:$('#business-id').value.trim(),campaign:$('#campaign-id').value.trim(),password:$('#app-password').value};
+  try{
+    state.permissions=await api('/api/config');
+    if(rememberAvailable&&$('#remember-device').checked){
+      const session=await api('/api/session',{method:'POST',body:'{}'});
+      // Save only the opaque, expiring session. Password and API key remain unsaved.
+      state.credentials={token:session.token,business:state.permissions.businessId,campaign:state.permissions.campaignId};
+      try{localStorage.setItem(savedSessionKey(),JSON.stringify({token:session.token,expiresAt:session.expiresAt}));}
+      catch{toast('Вы вошли, но браузер запретил запоминание устройства. После закрытия страницы потребуется пароль.');}
+    }else forgetSavedSession();
+    await showWorkspace();
+  }catch(error){state.credentials=null;$('#login-error').textContent=error.message;}
+  finally{$('#login-button').disabled=false;}
+});
+$('#logout').addEventListener('click',async()=>{
+  if(!confirm('Выйти и забыть вход на этом устройстве? Неотправленные данные будут очищены.'))return;
+  $('#logout').disabled=true;
+  try{
+    if(state.credentials?.token)try{await api('/api/session/logout',{method:'POST',body:'{}'});}catch(error){if(error.status!==401)throw error;}
+    forgetSavedSession();state.epoch++;state.credentials=null;
+    document.querySelectorAll('#orders textarea,#reply-text').forEach(input=>input.value='');location.reload();
+  }catch{notice('Не удалось завершить вход на сервере. Проверьте соединение и нажмите «Выйти» ещё раз.');$('#logout').disabled=false;}
+});
 visibilityToggle($('#api-key'),'Показать API-ключ','Скрыть API-ключ');visibilityToggle($('#app-password'));
 window.addEventListener('beforeunload',e=>{if([...document.querySelectorAll('#orders textarea,#reply-text')].some(x=>x.value)){e.preventDefault();e.returnValue='';}});
-(async()=>{await window.connectionReady;const today=new Date(),start=new Date();start.setDate(start.getDate()-29);$('#history-from').value=day(start);$('#history-to').value=day(today);try{const settings=await(await fetch(window.serviceUrl('/api/settings'),{cache:'no-store'})).json();$('#business-id').value=settings.businessId;$('#campaign-id').value=settings.campaignId;$('#business-id').readOnly=!!settings.businessId;$('#campaign-id').readOnly=!!settings.campaignId;$('#password-field').hidden=!settings.passwordRequired;$('#app-password').required=settings.passwordRequired;if(settings.serverKeyConfigured){document.querySelector('#api-key').required=false;document.querySelector('#api-key').placeholder='Ключ уже задан на сервере';}if(settings.demo){$('#demo-banner').hidden=false;$('#api-key').value='demo-key';}}catch{$('#login-error').textContent='Сервер недоступен. Обновите страницу.';}})();
+(async()=>{
+  await window.connectionReady;const today=new Date(),start=new Date();start.setDate(start.getDate()-29);$('#history-from').value=day(start);$('#history-to').value=day(today);
+  try{
+    const response=await fetch(window.serviceUrl('/api/settings'),{cache:'no-store'});if(!response.ok)throw new Error('settings');const settings=await response.json();
+    $('#business-id').value=settings.businessId;$('#campaign-id').value=settings.campaignId;$('#business-id').readOnly=!!settings.businessId;$('#campaign-id').readOnly=!!settings.campaignId;$('#password-field').hidden=!settings.passwordRequired;$('#app-password').required=settings.passwordRequired;
+    rememberAvailable=!!settings.rememberDeviceAvailable;$('#remember-field').hidden=!rememberAvailable;
+    if(!rememberAvailable)$('#login-hint').textContent='Пароль и API-ключ хранятся только в памяти открытой страницы.';
+    if(settings.serverKeyConfigured){$('#api-key').required=false;$('#api-key').placeholder='Ключ уже задан на сервере';}
+    if(settings.demo){$('#demo-banner').hidden=false;$('#api-key').value='demo-key';}
+    const session=rememberAvailable?readSavedSession():null;
+    if(session){
+      $('#login-button').textContent='Восстанавливаем вход…';state.credentials={token:session.token,business:settings.businessId,campaign:settings.campaignId};
+      try{state.permissions=await api('/api/config');await showWorkspace();}
+      catch(error){state.credentials=null;if(error.status===401)forgetSavedSession();$('#login-error').textContent=error.status===401?'Срок входа истёк. Введите пароль ещё раз.':error.message+' Сохранённый вход можно повторить, обновив страницу.';}
+    }
+  }catch{$('#login-error').textContent='Сервер недоступен. Обновите страницу.';}
+  finally{$('#login-button').textContent='Открыть заказы';$('#login-button').disabled=false;}
+})();
 
 'use strict';
 const poolLabels={available:'Доступен',reserved:'Зарезервирован',sold:'Выдан',blocked:'Заблокирован',prepared:'Подготовлено',sending:'Отправка / требуется проверка',accepted:'Принято Маркетом',uncertain:'Результат неизвестен',rejected:'Отклонено Маркетом'};
 const poolShops={mke:{name:'MKE SHOP',icon:'M'},roboticvn:{name:'ROBOTICVN SHOP',icon:'R'}};
 const poolFilters={modes:new Set(['unique','reusable']),providers:new Set(['local','mke','roboticvn'])};
-let categories=[],supplierShops={mke:{products:[],configured:null},roboticvn:{products:[],configured:null}},poolAutomation=null,poolOffset=0,ledgerOffset=0,poolGeneration=0,ledgerGeneration=0,walletGeneration=0,walletLoading=false;
+let categories=[],supplierShops={mke:{products:[],configured:null},roboticvn:{products:[],configured:null}},poolAutomation=null,poolOffset=0,ledgerOffset=0,poolGeneration=0,poolMetadataGeneration=0,poolLoadedFilters='',ledgerGeneration=0,walletGeneration=0,walletLoading=false;
 const post=(path,data)=>api(path,{method:'POST',body:JSON.stringify(data)});
 const rub=k=>k===null||k===undefined?'Ожидается сумма':new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB'}).format(k/100);
 function shopMoney(value,currency){if(value===null||value===undefined||value===''||!Number.isFinite(Number(value)))return 'Не получен';if(!currency)return `${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:4}).format(Number(value))} · валюта не указана`;try{return new Intl.NumberFormat('ru-RU',{style:'currency',currency}).format(Number(value));}catch{return `${value} ${currency}`;}}
@@ -255,7 +309,7 @@ function renderPoolAutomation(){
 }
 function checkboxFilter(title,name,options){
   const root=el('details','checkbox-filter'),summary=el('summary'),panel=el('div','checkbox-filter-options'),labels=new Map(options),refresh=()=>{const selected=[...poolFilters[name]];summary.textContent=`${title}: ${selected.length===options.length?'все':selected.length?selected.map(x=>labels.get(x)).join(', '):'ничего'}`;};
-  root.append(summary,panel);for(const [value,label] of options){const line=el('label','check'),check=el('input');check.type='checkbox';check.value=value;check.checked=poolFilters[name].has(value);check.onchange=()=>{check.checked?poolFilters[name].add(value):poolFilters[name].delete(value);refresh();loadPool();};line.append(check,document.createTextNode(label));panel.append(line);}
+  root.append(summary,panel);for(const [value,label] of options){const line=el('label','check'),check=el('input');check.type='checkbox';check.value=value;check.checked=poolFilters[name].has(value);check.onchange=()=>{check.checked?poolFilters[name].add(value):poolFilters[name].delete(value);refresh();loadPool(false,false);};line.append(check,document.createTextNode(label));panel.append(line);}
   root.addEventListener('keydown',event=>{if(event.key==='Escape'){root.open=false;summary.focus();}});refresh();return root;
 }
 function automationEvent(e){if(e.action.startsWith('finished:')){const delivered=e.action.match(/delivered=(\d+)/)?.[1]||'0',issues=e.action.match(/issues=(\d+)/)?.[1]||'0';return `Проверка завершена: отправлено ${delivered}, ошибок ${issues}`;}if(e.action.startsWith('auto_delivery_failed:'))return `Заказ № ${e.entity_id}: ${e.action.slice('auto_delivery_failed:'.length)}`;if(e.action.startsWith('google_sync_failed:'))return `Google Таблицы: ${e.action.slice('google_sync_failed:'.length)}`;if(e.action.startsWith('market_sync_failed:'))return `Получение заказов: ${e.action.slice('market_sync_failed:'.length)}`;return e.action;}
@@ -314,16 +368,38 @@ async function editItem(id){
     d.append(button('Удалить из пула',async()=>{if(!confirm('Удалить этот товар из пула без возможности восстановления?'))return;try{await post('/api/pool/delete',{id,version:row.version});d.close();await loadPool();toast('Товар удалён из пула.');}catch(e){notice(e.message);}},'button quiet'));
   }catch(e){notice(e.message);}
 }
-async function loadPool(more=false){
-  const generation=++poolGeneration;try{
-    const [cats]=await Promise.all([api('/api/pool/categories'),...Object.keys(poolShops).map(async provider=>{try{const result=await api(`/api/supplier/products?provider=${provider}`);if(generation===poolGeneration)supplierShops[provider]={...supplierShops[provider],products:result.products||[],nextOffset:result.nextOffset??null,total:result.total,catalogError:null};}catch(e){if(generation===poolGeneration)supplierShops[provider]={...supplierShops[provider],catalogError:e.message};}}),refreshWallets(),api('/api/ledger/status').then(status=>{if(generation===poolGeneration)poolAutomation=status;}).catch(()=>{if(generation===poolGeneration)poolAutomation=null;})]);if(generation!==poolGeneration)return;categories=cats.categories;
-    const selected=$('#pool-category').value;$('#pool-category').replaceChildren(new Option('Все категории',''));categories.forEach(c=>$('#pool-category').append(new Option(c.name,c.id)));$('#pool-category').value=selected;
-    if(!$('#pool-category').value)$('#pool-category').value='';renderCategoryCards();renderPoolAutomation();
-    if(!more)poolOffset=0;
-    const result=await api('/api/pool/items?'+new URLSearchParams({category:$('#pool-category').value,status:$('#pool-status').value,modes:[...poolFilters.modes].join(','),providers:[...poolFilters.providers].join(','),offset:String(poolOffset)}));if(generation!==poolGeneration)return;
-    if(!more)$('#pool-table').replaceChildren();$('#pool-table').append(dataTable(['Категория / закупка','Тип','Статус','Заказ','Добавлено','Обновлено','Данные'],result.items.map(r=>{const category=categories.find(c=>c.id===r.category_id),name=el('div','pool-table-category',r.category);name.append(el('small','',sourceLabel(category?categoryProvider(category):'local')));return [name,r.kind==='account'?'Аккаунт':'CDK',poolLabels[r.status],r.order_id,formatDate(r.created_at),formatDate(r.updated_at),button('Открыть',()=>editItem(r.id),'button quiet')];})));
-    if(!result.total){const filtered=!poolFilters.modes.size||!poolFilters.providers.size||poolFilters.modes.size<2||poolFilters.providers.size<3||$('#pool-category').value||$('#pool-status').value;const message=filtered?'Нет товаров по выбранным фильтрам.':categories.length?'Добавьте товар в свой пул или выберите магазин в настройках категории.':'Начните с кнопки «Создать категорию»: укажите название и артикул товара с Маркета.';$('#pool-table').replaceChildren(el('p','empty',message));}$('#pool-more').hidden=result.nextOffset===null;poolOffset=result.nextOffset;$('#pool-total').textContent=`Единиц в списке: ${result.total}`;
-  }catch(e){notice(e.message);}
+async function refreshPoolDetails(){
+  const generation=++poolMetadataGeneration;
+  await Promise.all([...Object.keys(poolShops).map(async provider=>{try{const result=await api(`/api/supplier/products?provider=${provider}`);if(generation===poolMetadataGeneration)supplierShops[provider]={...supplierShops[provider],products:result.products||[],nextOffset:result.nextOffset??null,total:result.total,catalogError:null};}catch(e){if(generation===poolMetadataGeneration)supplierShops[provider]={...supplierShops[provider],catalogError:e.message};}}),refreshWallets(),api('/api/ledger/status').then(status=>{if(generation===poolMetadataGeneration)poolAutomation=status;}).catch(()=>{if(generation===poolMetadataGeneration)poolAutomation=null;})]);
+  if(generation===poolMetadataGeneration){renderCategoryCards();renderPoolAutomation();}
+}
+function currentPoolFilters(){return {category:$('#pool-category').value,status:$('#pool-status').value,modes:[...poolFilters.modes].sort().join(','),providers:[...poolFilters.providers].sort().join(',')};}
+async function loadPool(more=false,refreshDetails=true){
+  const filters=currentPoolFilters(),moreButton=$('#pool-more'),table=$('#pool-table');
+  let filterKey=new URLSearchParams(filters).toString();
+  if(more&&(moreButton.disabled||poolOffset===null||filterKey!==poolLoadedFilters))return;
+  const generation=++poolGeneration,offset=more?poolOffset:0;
+  moreButton.disabled=true;table.setAttribute('aria-busy','true');
+  if(!more){poolOffset=null;poolLoadedFilters='';moreButton.hidden=true;table.replaceChildren(el('p','empty','Загружаем товары по выбранным фильтрам…'));$('#pool-total').textContent='Обновляем список…';}
+  renderCategoryCards();
+  // Catalogs and balances can be slow; filtering stock must never wait for a supplier.
+  if(refreshDetails&&!more)void refreshPoolDetails();
+  try{
+    if((refreshDetails&&!more)||!categories.length){
+      const cats=await api('/api/pool/categories');if(generation!==poolGeneration)return;categories=cats.categories;
+      $('#pool-category').replaceChildren(new Option('Все категории',''));categories.forEach(c=>$('#pool-category').append(new Option(c.name,c.id)));
+      if(filters.category&&!categories.some(c=>c.id===filters.category))filters.category='';
+      $('#pool-category').value=filters.category;filterKey=new URLSearchParams(filters).toString();renderCategoryCards();
+    }
+    const result=await api('/api/pool/items?'+new URLSearchParams({...filters,offset:String(offset)}));if(generation!==poolGeneration)return;
+    if(!more)table.replaceChildren();table.append(dataTable(['Категория / закупка','Режим / тип','Статус','Заказ','Добавлено','Обновлено','Данные'],result.items.map(r=>{const category=categories.find(c=>c.id===r.category_id),name=el('div','pool-table-category',r.category);name.append(el('small','',sourceLabel(category?categoryProvider(category):'local')));return [name,`${category?.reusable?'↻ Универсальный':'1× Уникальный'} · ${r.kind==='account'?'Аккаунт':'CDK'}`,poolLabels[r.status],r.order_id,formatDate(r.created_at),formatDate(r.updated_at),button('Открыть',()=>editItem(r.id),'button quiet')];})));
+    if(!result.total){const filtered=filters.modes!=='reusable,unique'||filters.providers!=='local,mke,roboticvn'||filters.category||filters.status;const message=filtered?'Нет товаров по выбранным фильтрам.':categories.length?'Добавьте товар в свой пул или выберите магазин в настройках категории.':'Начните с кнопки «Создать категорию»: укажите название и артикул товара с Маркета.';table.replaceChildren(el('p','empty',message));}
+    moreButton.hidden=result.nextOffset==null;poolOffset=result.nextOffset??null;poolLoadedFilters=filterKey;$('#pool-total').textContent=`Единиц в списке: ${result.total}`;
+  }catch(e){
+    if(generation!==poolGeneration)return;
+    poolOffset=null;poolLoadedFilters='';moreButton.hidden=true;$('#pool-total').textContent='Список не загружен';
+    table.replaceChildren(el('p','error-text',`Не удалось загрузить товары: ${e.message}`),button('Повторить',()=>loadPool(false,false),'button quiet'));notice(e.message);
+  }finally{if(generation===poolGeneration){table.setAttribute('aria-busy','false');moreButton.disabled=false;}}
 }
 async function ledgerDetails(order){
   try{
@@ -361,11 +437,11 @@ function mountPool(){
   <div class="pool-actions"><button id="new-category" class="button primary">Создать категорию</button><button id="new-item" class="button">Добавить товар</button><button id="bulk-items" class="button">Загрузить списком</button></div>
   <div class="pool-filterbar"><div id="pool-multifilters" class="pool-multifilters"></div><label>Категория<select id="pool-category"><option value="">Все категории</option></select></label><button id="pool-reset-filters" class="button quiet">Сбросить</button></div>
   <div class="category-section-head"><h2>Категории</h2><span id="category-count" class="hint"></span></div><div id="category-cards" class="category-grid"></div>
-  <div class="pool-stock-head"><h2>Товары в пуле</h2><label>Статус<select id="pool-status"><option value="">Все статусы</option><option value="available">Доступен</option><option value="reserved">В резерве</option><option value="sold">Выдан</option><option value="blocked">Заблокирован</option></select></label><span id="pool-total" class="hint"></span></div><div id="pool-table"></div><button id="pool-more" class="button more" hidden>Ещё товары</button>`;
+  <div class="pool-stock-head"><h2>Товары в пуле</h2><label>Статус<select id="pool-status"><option value="">Все статусы</option><option value="available">Доступен</option><option value="reserved">В резерве</option><option value="sold">Выдан</option><option value="blocked">Заблокирован</option></select></label><span id="pool-total" class="hint" aria-live="polite"></span></div><p class="hint">Выбранные выше режимы, магазины и категория применяются и к этому списку.</p><div id="pool-table"></div><button id="pool-more" class="button more" hidden>Ещё товары</button>`;
   $('#ledger-panel').innerHTML='<div class="page-head"><div><p class="eyebrow">СОХРАНЁННЫЕ АВТОМАТИЧЕСКИЕ ВЫДАЧИ</p><h1>Учёт заказов</h1><p class="muted">Здесь видны отправленные данные, инструкция и состояние каждого заказа.</p></div><button id="refresh-ledger" class="button">Обновить</button></div><p id="automation-status" class="hint"></p><details><summary>Журнал автовыдачи и ошибок</summary><p class="hint">Если выдача не состоялась, здесь появятся номер заказа и причина.</p><ul id="automation-events"></ul></details><form id="ledger-filter" class="filters"><label>Номер заказа<input id="ledger-search" inputmode="numeric" placeholder="Все заказы"></label><button class="button">Найти</button></form><div id="ledger-table"></div><button id="ledger-more" class="button more" hidden>Ещё заказы</button>';
   const mountFilters=()=>$('#pool-multifilters').replaceChildren(checkboxFilter('Режим','modes',[['unique','Уникальные'],['reusable','Универсальные']]),checkboxFilter('Закупка','providers',[['local','Свой пул'],['mke','MKE SHOP'],['roboticvn','ROBOTICVN SHOP']]));mountFilters();renderWallets();renderPoolAutomation();
-  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool();$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool();$('#pool-more').onclick=()=>loadPool(true);
-  $('#pool-reset-filters').onclick=()=>{poolFilters.modes=new Set(['unique','reusable']);poolFilters.providers=new Set(['local','mke','roboticvn']);$('#pool-category').value=$('#pool-status').value='';mountFilters();loadPool();};
+  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool();$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool(false,false);$('#pool-more').onclick=()=>loadPool(true,false);
+  $('#pool-reset-filters').onclick=()=>{poolFilters.modes=new Set(['unique','reusable']);poolFilters.providers=new Set(['local','mke','roboticvn']);$('#pool-category').value=$('#pool-status').value='';mountFilters();loadPool(false,false);};
   document.addEventListener('click',event=>{document.querySelectorAll('.checkbox-filter[open]').forEach(filter=>{if(!filter.contains(event.target))filter.open=false;});});
   $('#refresh-ledger').onclick=()=>loadLedger();$('#ledger-more').onclick=()=>loadLedger(true);$('#ledger-filter').onsubmit=e=>{e.preventDefault();loadLedger();};
 }

@@ -2,7 +2,7 @@
 const poolLabels={available:'Доступен',reserved:'Зарезервирован',sold:'Выдан',blocked:'Заблокирован',prepared:'Подготовлено',sending:'Отправка / требуется проверка',accepted:'Принято Маркетом',uncertain:'Результат неизвестен',rejected:'Отклонено Маркетом'};
 const poolShops={mke:{name:'MKE SHOP',icon:'M'},roboticvn:{name:'ROBOTICVN SHOP',icon:'R'}};
 const poolFilters={modes:new Set(['unique','reusable']),providers:new Set(['local','mke','roboticvn'])};
-let categories=[],supplierShops={mke:{products:[],configured:null},roboticvn:{products:[],configured:null}},poolAutomation=null,poolOffset=0,ledgerOffset=0,poolGeneration=0,ledgerGeneration=0,walletGeneration=0,walletLoading=false;
+let categories=[],supplierShops={mke:{products:[],configured:null},roboticvn:{products:[],configured:null}},poolAutomation=null,poolOffset=0,ledgerOffset=0,poolGeneration=0,poolMetadataGeneration=0,poolLoadedFilters='',ledgerGeneration=0,walletGeneration=0,walletLoading=false;
 const post=(path,data)=>api(path,{method:'POST',body:JSON.stringify(data)});
 const rub=k=>k===null||k===undefined?'Ожидается сумма':new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB'}).format(k/100);
 function shopMoney(value,currency){if(value===null||value===undefined||value===''||!Number.isFinite(Number(value)))return 'Не получен';if(!currency)return `${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:4}).format(Number(value))} · валюта не указана`;try{return new Intl.NumberFormat('ru-RU',{style:'currency',currency}).format(Number(value));}catch{return `${value} ${currency}`;}}
@@ -69,7 +69,7 @@ function renderPoolAutomation(){
 }
 function checkboxFilter(title,name,options){
   const root=el('details','checkbox-filter'),summary=el('summary'),panel=el('div','checkbox-filter-options'),labels=new Map(options),refresh=()=>{const selected=[...poolFilters[name]];summary.textContent=`${title}: ${selected.length===options.length?'все':selected.length?selected.map(x=>labels.get(x)).join(', '):'ничего'}`;};
-  root.append(summary,panel);for(const [value,label] of options){const line=el('label','check'),check=el('input');check.type='checkbox';check.value=value;check.checked=poolFilters[name].has(value);check.onchange=()=>{check.checked?poolFilters[name].add(value):poolFilters[name].delete(value);refresh();loadPool();};line.append(check,document.createTextNode(label));panel.append(line);}
+  root.append(summary,panel);for(const [value,label] of options){const line=el('label','check'),check=el('input');check.type='checkbox';check.value=value;check.checked=poolFilters[name].has(value);check.onchange=()=>{check.checked?poolFilters[name].add(value):poolFilters[name].delete(value);refresh();loadPool(false,false);};line.append(check,document.createTextNode(label));panel.append(line);}
   root.addEventListener('keydown',event=>{if(event.key==='Escape'){root.open=false;summary.focus();}});refresh();return root;
 }
 function automationEvent(e){if(e.action.startsWith('finished:')){const delivered=e.action.match(/delivered=(\d+)/)?.[1]||'0',issues=e.action.match(/issues=(\d+)/)?.[1]||'0';return `Проверка завершена: отправлено ${delivered}, ошибок ${issues}`;}if(e.action.startsWith('auto_delivery_failed:'))return `Заказ № ${e.entity_id}: ${e.action.slice('auto_delivery_failed:'.length)}`;if(e.action.startsWith('google_sync_failed:'))return `Google Таблицы: ${e.action.slice('google_sync_failed:'.length)}`;if(e.action.startsWith('market_sync_failed:'))return `Получение заказов: ${e.action.slice('market_sync_failed:'.length)}`;return e.action;}
@@ -128,16 +128,38 @@ async function editItem(id){
     d.append(button('Удалить из пула',async()=>{if(!confirm('Удалить этот товар из пула без возможности восстановления?'))return;try{await post('/api/pool/delete',{id,version:row.version});d.close();await loadPool();toast('Товар удалён из пула.');}catch(e){notice(e.message);}},'button quiet'));
   }catch(e){notice(e.message);}
 }
-async function loadPool(more=false){
-  const generation=++poolGeneration;try{
-    const [cats]=await Promise.all([api('/api/pool/categories'),...Object.keys(poolShops).map(async provider=>{try{const result=await api(`/api/supplier/products?provider=${provider}`);if(generation===poolGeneration)supplierShops[provider]={...supplierShops[provider],products:result.products||[],nextOffset:result.nextOffset??null,total:result.total,catalogError:null};}catch(e){if(generation===poolGeneration)supplierShops[provider]={...supplierShops[provider],catalogError:e.message};}}),refreshWallets(),api('/api/ledger/status').then(status=>{if(generation===poolGeneration)poolAutomation=status;}).catch(()=>{if(generation===poolGeneration)poolAutomation=null;})]);if(generation!==poolGeneration)return;categories=cats.categories;
-    const selected=$('#pool-category').value;$('#pool-category').replaceChildren(new Option('Все категории',''));categories.forEach(c=>$('#pool-category').append(new Option(c.name,c.id)));$('#pool-category').value=selected;
-    if(!$('#pool-category').value)$('#pool-category').value='';renderCategoryCards();renderPoolAutomation();
-    if(!more)poolOffset=0;
-    const result=await api('/api/pool/items?'+new URLSearchParams({category:$('#pool-category').value,status:$('#pool-status').value,modes:[...poolFilters.modes].join(','),providers:[...poolFilters.providers].join(','),offset:String(poolOffset)}));if(generation!==poolGeneration)return;
-    if(!more)$('#pool-table').replaceChildren();$('#pool-table').append(dataTable(['Категория / закупка','Тип','Статус','Заказ','Добавлено','Обновлено','Данные'],result.items.map(r=>{const category=categories.find(c=>c.id===r.category_id),name=el('div','pool-table-category',r.category);name.append(el('small','',sourceLabel(category?categoryProvider(category):'local')));return [name,r.kind==='account'?'Аккаунт':'CDK',poolLabels[r.status],r.order_id,formatDate(r.created_at),formatDate(r.updated_at),button('Открыть',()=>editItem(r.id),'button quiet')];})));
-    if(!result.total){const filtered=!poolFilters.modes.size||!poolFilters.providers.size||poolFilters.modes.size<2||poolFilters.providers.size<3||$('#pool-category').value||$('#pool-status').value;const message=filtered?'Нет товаров по выбранным фильтрам.':categories.length?'Добавьте товар в свой пул или выберите магазин в настройках категории.':'Начните с кнопки «Создать категорию»: укажите название и артикул товара с Маркета.';$('#pool-table').replaceChildren(el('p','empty',message));}$('#pool-more').hidden=result.nextOffset===null;poolOffset=result.nextOffset;$('#pool-total').textContent=`Единиц в списке: ${result.total}`;
-  }catch(e){notice(e.message);}
+async function refreshPoolDetails(){
+  const generation=++poolMetadataGeneration;
+  await Promise.all([...Object.keys(poolShops).map(async provider=>{try{const result=await api(`/api/supplier/products?provider=${provider}`);if(generation===poolMetadataGeneration)supplierShops[provider]={...supplierShops[provider],products:result.products||[],nextOffset:result.nextOffset??null,total:result.total,catalogError:null};}catch(e){if(generation===poolMetadataGeneration)supplierShops[provider]={...supplierShops[provider],catalogError:e.message};}}),refreshWallets(),api('/api/ledger/status').then(status=>{if(generation===poolMetadataGeneration)poolAutomation=status;}).catch(()=>{if(generation===poolMetadataGeneration)poolAutomation=null;})]);
+  if(generation===poolMetadataGeneration){renderCategoryCards();renderPoolAutomation();}
+}
+function currentPoolFilters(){return {category:$('#pool-category').value,status:$('#pool-status').value,modes:[...poolFilters.modes].sort().join(','),providers:[...poolFilters.providers].sort().join(',')};}
+async function loadPool(more=false,refreshDetails=true){
+  const filters=currentPoolFilters(),moreButton=$('#pool-more'),table=$('#pool-table');
+  let filterKey=new URLSearchParams(filters).toString();
+  if(more&&(moreButton.disabled||poolOffset===null||filterKey!==poolLoadedFilters))return;
+  const generation=++poolGeneration,offset=more?poolOffset:0;
+  moreButton.disabled=true;table.setAttribute('aria-busy','true');
+  if(!more){poolOffset=null;poolLoadedFilters='';moreButton.hidden=true;table.replaceChildren(el('p','empty','Загружаем товары по выбранным фильтрам…'));$('#pool-total').textContent='Обновляем список…';}
+  renderCategoryCards();
+  // Catalogs and balances can be slow; filtering stock must never wait for a supplier.
+  if(refreshDetails&&!more)void refreshPoolDetails();
+  try{
+    if((refreshDetails&&!more)||!categories.length){
+      const cats=await api('/api/pool/categories');if(generation!==poolGeneration)return;categories=cats.categories;
+      $('#pool-category').replaceChildren(new Option('Все категории',''));categories.forEach(c=>$('#pool-category').append(new Option(c.name,c.id)));
+      if(filters.category&&!categories.some(c=>c.id===filters.category))filters.category='';
+      $('#pool-category').value=filters.category;filterKey=new URLSearchParams(filters).toString();renderCategoryCards();
+    }
+    const result=await api('/api/pool/items?'+new URLSearchParams({...filters,offset:String(offset)}));if(generation!==poolGeneration)return;
+    if(!more)table.replaceChildren();table.append(dataTable(['Категория / закупка','Режим / тип','Статус','Заказ','Добавлено','Обновлено','Данные'],result.items.map(r=>{const category=categories.find(c=>c.id===r.category_id),name=el('div','pool-table-category',r.category);name.append(el('small','',sourceLabel(category?categoryProvider(category):'local')));return [name,`${category?.reusable?'↻ Универсальный':'1× Уникальный'} · ${r.kind==='account'?'Аккаунт':'CDK'}`,poolLabels[r.status],r.order_id,formatDate(r.created_at),formatDate(r.updated_at),button('Открыть',()=>editItem(r.id),'button quiet')];})));
+    if(!result.total){const filtered=filters.modes!=='reusable,unique'||filters.providers!=='local,mke,roboticvn'||filters.category||filters.status;const message=filtered?'Нет товаров по выбранным фильтрам.':categories.length?'Добавьте товар в свой пул или выберите магазин в настройках категории.':'Начните с кнопки «Создать категорию»: укажите название и артикул товара с Маркета.';table.replaceChildren(el('p','empty',message));}
+    moreButton.hidden=result.nextOffset==null;poolOffset=result.nextOffset??null;poolLoadedFilters=filterKey;$('#pool-total').textContent=`Единиц в списке: ${result.total}`;
+  }catch(e){
+    if(generation!==poolGeneration)return;
+    poolOffset=null;poolLoadedFilters='';moreButton.hidden=true;$('#pool-total').textContent='Список не загружен';
+    table.replaceChildren(el('p','error-text',`Не удалось загрузить товары: ${e.message}`),button('Повторить',()=>loadPool(false,false),'button quiet'));notice(e.message);
+  }finally{if(generation===poolGeneration){table.setAttribute('aria-busy','false');moreButton.disabled=false;}}
 }
 async function ledgerDetails(order){
   try{
@@ -175,11 +197,11 @@ function mountPool(){
   <div class="pool-actions"><button id="new-category" class="button primary">Создать категорию</button><button id="new-item" class="button">Добавить товар</button><button id="bulk-items" class="button">Загрузить списком</button></div>
   <div class="pool-filterbar"><div id="pool-multifilters" class="pool-multifilters"></div><label>Категория<select id="pool-category"><option value="">Все категории</option></select></label><button id="pool-reset-filters" class="button quiet">Сбросить</button></div>
   <div class="category-section-head"><h2>Категории</h2><span id="category-count" class="hint"></span></div><div id="category-cards" class="category-grid"></div>
-  <div class="pool-stock-head"><h2>Товары в пуле</h2><label>Статус<select id="pool-status"><option value="">Все статусы</option><option value="available">Доступен</option><option value="reserved">В резерве</option><option value="sold">Выдан</option><option value="blocked">Заблокирован</option></select></label><span id="pool-total" class="hint"></span></div><div id="pool-table"></div><button id="pool-more" class="button more" hidden>Ещё товары</button>`;
+  <div class="pool-stock-head"><h2>Товары в пуле</h2><label>Статус<select id="pool-status"><option value="">Все статусы</option><option value="available">Доступен</option><option value="reserved">В резерве</option><option value="sold">Выдан</option><option value="blocked">Заблокирован</option></select></label><span id="pool-total" class="hint" aria-live="polite"></span></div><p class="hint">Выбранные выше режимы, магазины и категория применяются и к этому списку.</p><div id="pool-table"></div><button id="pool-more" class="button more" hidden>Ещё товары</button>`;
   $('#ledger-panel').innerHTML='<div class="page-head"><div><p class="eyebrow">СОХРАНЁННЫЕ АВТОМАТИЧЕСКИЕ ВЫДАЧИ</p><h1>Учёт заказов</h1><p class="muted">Здесь видны отправленные данные, инструкция и состояние каждого заказа.</p></div><button id="refresh-ledger" class="button">Обновить</button></div><p id="automation-status" class="hint"></p><details><summary>Журнал автовыдачи и ошибок</summary><p class="hint">Если выдача не состоялась, здесь появятся номер заказа и причина.</p><ul id="automation-events"></ul></details><form id="ledger-filter" class="filters"><label>Номер заказа<input id="ledger-search" inputmode="numeric" placeholder="Все заказы"></label><button class="button">Найти</button></form><div id="ledger-table"></div><button id="ledger-more" class="button more" hidden>Ещё заказы</button>';
   const mountFilters=()=>$('#pool-multifilters').replaceChildren(checkboxFilter('Режим','modes',[['unique','Уникальные'],['reusable','Универсальные']]),checkboxFilter('Закупка','providers',[['local','Свой пул'],['mke','MKE SHOP'],['roboticvn','ROBOTICVN SHOP']]));mountFilters();renderWallets();renderPoolAutomation();
-  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool();$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool();$('#pool-more').onclick=()=>loadPool(true);
-  $('#pool-reset-filters').onclick=()=>{poolFilters.modes=new Set(['unique','reusable']);poolFilters.providers=new Set(['local','mke','roboticvn']);$('#pool-category').value=$('#pool-status').value='';mountFilters();loadPool();};
+  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool();$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool(false,false);$('#pool-more').onclick=()=>loadPool(true,false);
+  $('#pool-reset-filters').onclick=()=>{poolFilters.modes=new Set(['unique','reusable']);poolFilters.providers=new Set(['local','mke','roboticvn']);$('#pool-category').value=$('#pool-status').value='';mountFilters();loadPool(false,false);};
   document.addEventListener('click',event=>{document.querySelectorAll('.checkbox-filter[open]').forEach(filter=>{if(!filter.contains(event.target))filter.open=false;});});
   $('#refresh-ledger').onclick=()=>loadLedger();$('#ledger-more').onclick=()=>loadLedger(true);$('#ledger-filter').onsubmit=e=>{e.preventDefault();loadLedger();};
 }

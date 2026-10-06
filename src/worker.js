@@ -7,7 +7,7 @@ export default {
       const origin = request.headers.get('Origin');
       const crossOrigin = origin && origin !== new URL(request.url).origin;
       if (crossOrigin && origin !== env.GITHUB_PAGES_ORIGIN) return new Response('Origin not allowed', {status:403});
-      const cors = crossOrigin ? {'Access-Control-Allow-Origin':origin,'Vary':'Origin','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type, X-App-Request, X-Market-Key, X-Business-Id, X-Campaign-Id, X-App-Password'} : {};
+      const cors = crossOrigin ? {'Access-Control-Allow-Origin':origin,'Vary':'Origin','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type, Authorization, X-App-Request, X-Market-Key, X-Business-Id, X-Campaign-Id, X-App-Password'} : {};
       if (request.method === 'OPTIONS') return new Response(null, {status:204,headers:cors});
       // Exact trusted Pages origin was checked above; API guard then checks the request marker.
       const headers = new Headers(request.headers);

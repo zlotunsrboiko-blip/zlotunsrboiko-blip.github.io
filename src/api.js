@@ -1,6 +1,7 @@
 import {Inventory, StoreError} from './inventory.js';
 import {SupplierError,supplierAccount,supplierProducts} from './supplier.js';
 import {roboticAccount,roboticProducts} from './roboticvn.js';
+import {SessionError,rememberDeviceAvailable,requestSession,createSession,verifySession,revokeSession} from './sessions.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
@@ -76,15 +77,18 @@ export async function handleApi(req, env, fetcher = fetch) {
   try {
     const url = new URL(req.url), p = url.searchParams, route = url.pathname;
     const settings = {businessId: env.YANDEX_BUSINESS_ID || '', campaignId: env.YANDEX_CAMPAIGN_ID || '', passwordRequired: !!env.APP_PASSWORD, demo: env.DEMO === 'true', inventoryEnabled:!!env.DB,supplierConfigured:!!(env.MKE_API_KEY||env.ROBOTICVN_API_KEY)};
-    if (route === '/api/settings' && req.method === 'GET') return json({...settings,serverKeyConfigured:!!env.YANDEX_API_KEY});
+    if (route === '/api/settings' && req.method === 'GET') return json({...settings,serverKeyConfigured:!!env.YANDEX_API_KEY,rememberDeviceAvailable:rememberDeviceAvailable(env)});
     if (env.REQUIRE_PASSWORD === 'true' && (!env.APP_PASSWORD || env.APP_PASSWORD.length < 16)) throw new ApiError('В секретах хостинга нужно задать APP_PASSWORD длиной от 16 символов.', 503);
     if (req.headers.get('x-app-request') !== 'digital-goods') throw new ApiError('Откройте сервис в браузере.', 403);
     const origin = req.headers.get('origin');
     if (origin && origin !== url.origin) throw new ApiError('Запрос с другого сайта отклонён.', 403);
-    // Credentials live only in the current page's memory. Never log headers or request bodies.
+    // Passwords live only in page memory. Remembered devices use revocable opaque sessions.
+    // Never log headers or request bodies.
     let password;
     try { password = decodeURIComponent(req.headers.get('x-app-password') || ''); } catch { throw new ApiError('Некорректный пароль.', 401); }
-    if (env.APP_PASSWORD && !await equalSecret(password, env.APP_PASSWORD)) throw new ApiError('Неверный пароль сервиса.', 401);
+    const sessionToken = requestSession(req);
+    if (sessionToken) await verifySession(env, sessionToken);
+    else if (env.APP_PASSWORD && !await equalSecret(password, env.APP_PASSWORD)) throw new ApiError('Неверный пароль сервиса.', 401);
     const key = env.YANDEX_API_KEY || req.headers.get('x-market-key');
     if (!key || key.length > 2048) throw new ApiError('Введите API-ключ Маркета.', 401);
     const business = id(settings.businessId || req.headers.get('x-business-id'), 'ID кабинета');
@@ -116,6 +120,16 @@ export async function handleApi(req, env, fetcher = fetch) {
       const order = result.orders?.find(x => String(x.id ?? x.orderId) === String(orderId));
       if (!order || (order.campaignId && Number(order.campaignId) !== campaign)) throw new ApiError('Заказ не найден в выбранном магазине.', 404);
       return order;
+    }
+    if (route === '/api/session' && req.method === 'POST') {
+      if (!env.APP_PASSWORD || !await equalSecret(password, env.APP_PASSWORD)) throw new ApiError('Чтобы запомнить устройство, введите пароль сервиса.', 401);
+      if (!rememberDeviceAvailable(env)) throw new ApiError('Запоминание устройства ещё не настроено на сервере.', 503);
+      await market('/v2/auth/token', {});
+      return json(await createSession(env));
+    }
+    if (route === '/api/session/logout' && req.method === 'POST') {
+      await revokeSession(env, sessionToken);
+      return json({ok:true});
     }
     if(route==='/api/supplier/status'&&req.method==='GET'){
       const provider=p.get('provider')||'mke';
@@ -244,7 +258,7 @@ export async function handleApi(req, env, fetcher = fetch) {
     }
     throw new ApiError('Метод не найден.', 404);
   } catch (error) {
-    const known=error instanceof ApiError||error instanceof StoreError||error instanceof SupplierError;
+    const known=error instanceof ApiError||error instanceof StoreError||error instanceof SupplierError||error instanceof SessionError;
     return json({error:known?error.message:'Не удалось обработать запрос.', uncertain: !!error.uncertain},known?error.status:500);
   }
 }

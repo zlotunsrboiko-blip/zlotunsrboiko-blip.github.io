@@ -15,12 +15,12 @@ function badge(status) { return el('span',`badge ${status==='DELIVERED'?'green':
 async function api(path, options={}) {
   const epoch=state.epoch,c=state.credentials||{};
   let response;
-  try { response=await fetch(window.serviceUrl(path),{...options,cache:'no-store',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-Market-Key':c.key||'','X-Business-Id':c.business||'','X-Campaign-Id':c.campaign||'','X-App-Password':encodeURIComponent(c.password||'')}}); }
+  try { response=await fetch(window.serviceUrl(path),{...options,cache:'no-store',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods',...(c.token?{Authorization:`Bearer ${c.token}`}:{'X-Market-Key':c.key||'','X-App-Password':encodeURIComponent(c.password||'')}),'X-Business-Id':c.business||'','X-Campaign-Id':c.campaign||''}}); }
   catch { const e=new Error(options.method==='POST'?'Связь прервалась. Проверьте результат в Маркете перед повторной отправкой.':'Сервер недоступен. Проверьте соединение.');e.uncertain=options.method==='POST';throw e; }
   if(epoch!==state.epoch)throw new Error('Вход завершён.');
   let data;
   try { data=await response.json(); } catch { const e=new Error('Не удалось прочитать ответ сервера. При отправке проверьте результат в Маркете перед повтором.');e.uncertain=options.method==='POST';throw e; }
-  if(!response.ok||data.error){const error=new Error(data.error||'Не удалось выполнить запрос.');error.uncertain=data.uncertain||(options.method==='POST'&&response.status>=500);throw error;}return data;
+  if(!response.ok||data.error){const error=new Error(data.error||'Не удалось выполнить запрос.');error.status=response.status;error.uncertain=data.uncertain||(options.method==='POST'&&response.status>=500);throw error;}return data;
 }
 function switchTab(tab) { document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===tab);if(b.dataset.tab===tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==`${tab}-panel`);notice(''); }
 function field(labelText, tag='input', props={}) {const label=el('label','',labelText),input=el(tag);Object.assign(input,props);label.append(input);return {label,input};}
@@ -90,8 +90,61 @@ $('#refresh-orders').addEventListener('click',()=>{if([...document.querySelector
 $('#test-orders').addEventListener('change',()=>{if([...document.querySelectorAll('#orders textarea')].some(x=>x.value)&&!confirm('Переключить заказы? Введённые данные будут очищены.')){$('#test-orders').checked=!$('#test-orders').checked;return;}loadOrders();});
 $('#more-orders').addEventListener('click',()=>loadOrders(true));$('#more-history').addEventListener('click',()=>loadHistory(true));$('#more-chats').addEventListener('click',()=>loadChats(true));
 $('#history-filter').addEventListener('submit',e=>{e.preventDefault();loadHistory();});$('#chat-filter').addEventListener('submit',e=>{e.preventDefault();loadChats();});$('#refresh-chats').addEventListener('click',()=>loadChats());
-$('#login-form').addEventListener('submit',async e=>{e.preventDefault();$('#login-button').disabled=true;$('#login-error').textContent='';state.credentials={key:$('#api-key').value.trim(),business:$('#business-id').value.trim(),campaign:$('#campaign-id').value.trim(),password:$('#app-password').value};try{state.permissions=await api('/api/config');$('#api-key').value='';$('#app-password').value='';$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;$('#account-label').textContent=`Магазин ${state.permissions.campaignId}`;await loadOrders();}catch(e){state.credentials=null;$('#login-error').textContent=e.message;}finally{$('#login-button').disabled=false;}});
-$('#logout').addEventListener('click',()=>{if(!confirm('Выйти? Неотправленные данные будут очищены.'))return;state.epoch++;state.credentials=null;location.reload();});
+let rememberAvailable=false;
+function savedSessionKey(){return 'digital-goods-session:'+new URL(window.serviceUrl('/api/session'),location.href).origin;}
+function forgetSavedSession(){try{localStorage.removeItem(savedSessionKey());}catch{}}
+function readSavedSession(){
+  try{const session=JSON.parse(localStorage.getItem(savedSessionKey())||'null');if(session&&/^[a-f0-9]{64}$/.test(session.token)&&Number.isFinite(session.expiresAt)&&session.expiresAt>Date.now())return session;}catch{}
+  forgetSavedSession();return null;
+}
+async function showWorkspace(){
+  $('#api-key').value='';$('#app-password').value='';$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;
+  $('#logout').title=state.credentials?.token?'Выйти и забыть это устройство':'Выйти';
+  $('#account-label').textContent=`Магазин ${state.permissions.campaignId}`;await loadOrders();
+}
+$('#login-form').addEventListener('submit',async e=>{
+  e.preventDefault();if($('#login-button').disabled)return;
+  $('#login-button').disabled=true;$('#login-error').textContent='';
+  state.credentials={key:$('#api-key').value.trim(),business:$('#business-id').value.trim(),campaign:$('#campaign-id').value.trim(),password:$('#app-password').value};
+  try{
+    state.permissions=await api('/api/config');
+    if(rememberAvailable&&$('#remember-device').checked){
+      const session=await api('/api/session',{method:'POST',body:'{}'});
+      // Save only the opaque, expiring session. Password and API key remain unsaved.
+      state.credentials={token:session.token,business:state.permissions.businessId,campaign:state.permissions.campaignId};
+      try{localStorage.setItem(savedSessionKey(),JSON.stringify({token:session.token,expiresAt:session.expiresAt}));}
+      catch{toast('Вы вошли, но браузер запретил запоминание устройства. После закрытия страницы потребуется пароль.');}
+    }else forgetSavedSession();
+    await showWorkspace();
+  }catch(error){state.credentials=null;$('#login-error').textContent=error.message;}
+  finally{$('#login-button').disabled=false;}
+});
+$('#logout').addEventListener('click',async()=>{
+  if(!confirm('Выйти и забыть вход на этом устройстве? Неотправленные данные будут очищены.'))return;
+  $('#logout').disabled=true;
+  try{
+    if(state.credentials?.token)try{await api('/api/session/logout',{method:'POST',body:'{}'});}catch(error){if(error.status!==401)throw error;}
+    forgetSavedSession();state.epoch++;state.credentials=null;
+    document.querySelectorAll('#orders textarea,#reply-text').forEach(input=>input.value='');location.reload();
+  }catch{notice('Не удалось завершить вход на сервере. Проверьте соединение и нажмите «Выйти» ещё раз.');$('#logout').disabled=false;}
+});
 visibilityToggle($('#api-key'),'Показать API-ключ','Скрыть API-ключ');visibilityToggle($('#app-password'));
 window.addEventListener('beforeunload',e=>{if([...document.querySelectorAll('#orders textarea,#reply-text')].some(x=>x.value)){e.preventDefault();e.returnValue='';}});
-(async()=>{await window.connectionReady;const today=new Date(),start=new Date();start.setDate(start.getDate()-29);$('#history-from').value=day(start);$('#history-to').value=day(today);try{const settings=await(await fetch(window.serviceUrl('/api/settings'),{cache:'no-store'})).json();$('#business-id').value=settings.businessId;$('#campaign-id').value=settings.campaignId;$('#business-id').readOnly=!!settings.businessId;$('#campaign-id').readOnly=!!settings.campaignId;$('#password-field').hidden=!settings.passwordRequired;$('#app-password').required=settings.passwordRequired;if(settings.serverKeyConfigured){document.querySelector('#api-key').required=false;document.querySelector('#api-key').placeholder='Ключ уже задан на сервере';}if(settings.demo){$('#demo-banner').hidden=false;$('#api-key').value='demo-key';}}catch{$('#login-error').textContent='Сервер недоступен. Обновите страницу.';}})();
+(async()=>{
+  await window.connectionReady;const today=new Date(),start=new Date();start.setDate(start.getDate()-29);$('#history-from').value=day(start);$('#history-to').value=day(today);
+  try{
+    const response=await fetch(window.serviceUrl('/api/settings'),{cache:'no-store'});if(!response.ok)throw new Error('settings');const settings=await response.json();
+    $('#business-id').value=settings.businessId;$('#campaign-id').value=settings.campaignId;$('#business-id').readOnly=!!settings.businessId;$('#campaign-id').readOnly=!!settings.campaignId;$('#password-field').hidden=!settings.passwordRequired;$('#app-password').required=settings.passwordRequired;
+    rememberAvailable=!!settings.rememberDeviceAvailable;$('#remember-field').hidden=!rememberAvailable;
+    if(!rememberAvailable)$('#login-hint').textContent='Пароль и API-ключ хранятся только в памяти открытой страницы.';
+    if(settings.serverKeyConfigured){$('#api-key').required=false;$('#api-key').placeholder='Ключ уже задан на сервере';}
+    if(settings.demo){$('#demo-banner').hidden=false;$('#api-key').value='demo-key';}
+    const session=rememberAvailable?readSavedSession():null;
+    if(session){
+      $('#login-button').textContent='Восстанавливаем вход…';state.credentials={token:session.token,business:settings.businessId,campaign:settings.campaignId};
+      try{state.permissions=await api('/api/config');await showWorkspace();}
+      catch(error){state.credentials=null;if(error.status===401)forgetSavedSession();$('#login-error').textContent=error.status===401?'Срок входа истёк. Введите пароль ещё раз.':error.message+' Сохранённый вход можно повторить, обновив страницу.';}
+    }
+  }catch{$('#login-error').textContent='Сервер недоступен. Обновите страницу.';}
+  finally{$('#login-button').textContent='Открыть заказы';$('#login-button').disabled=false;}
+})();
