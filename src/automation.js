@@ -2,6 +2,7 @@ import {handleApi} from './api.js';
 import {Inventory,deliveryText} from './inventory.js';
 import {syncSheets} from './sheets.js';
 import {procure} from './procurement.js';
+import {canBuyBeforeCheckout} from './supplier-stock.js';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 const reason=error=>String(error?.message||'Неизвестная ошибка').replace(/\s+/g,' ').slice(0,300);
 export async function runAutomation(env,fetcher=fetch){
@@ -29,13 +30,18 @@ export async function runAutomation(env,fetcher=fetch){
         const available=remaining.get(category.id);
         // A previous purchase takes priority even if somebody has since restocked locally.
         const purchase=await store.q('SELECT name FROM jobs WHERE name=?',`purchase:${order.id??order.orderId}:${item.id}`).first();
-        if(!purchase&&available>=(category.reusable?1:quantity)){if(!category.reusable)remaining.set(category.id,available-quantity);continue;}
+        const enoughLocal=available>=(category.reusable?1:quantity);
+        let preferSupplier=category.supplier_enabled&&!category.reusable&&category.delivery_priority==='supplier_first';
+        if(!purchase&&preferSupplier&&enoughLocal){
+          try{preferSupplier=await canBuyBeforeCheckout(env,category,quantity,fetcher);}catch{preferSupplier=false;}
+        }
+        if(!purchase&&enoughLocal&&!preferSupplier){if(!category.reusable)remaining.set(category.id,available-quantity);continue;}
         if(!category.supplier_enabled||category.reusable)throw new Error(`В категории «${category.name}» недостаточно доступных товаров.`);
         plans.push({item,quantity,category});
       }
       for(const {item,quantity,category} of plans){
         const bought=await procure(store,env,{orderId:String(order.id??order.orderId),itemId:item.id,category,quantity},fetcher);
-        external.push({id:item.id,codes:bought.codes,secrets:bought.secrets,slip:category.slip,activate_till:category.activate_till});
+        external.push({id:item.id,codes:bought.codes,secrets:bought.secrets,slip:bought.slip||category.supplier_slip||category.slip,activate_till:bought.activateTill||category.activate_till});
       }
       return store.prepare(order,external.length?external:null);
     }

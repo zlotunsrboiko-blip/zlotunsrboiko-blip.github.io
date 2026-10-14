@@ -111,6 +111,15 @@ export async function roboticProducts(env, fetcher = fetch, {offset = 0, limit =
   return {products, nextOffset: summaries.length === limit && (total === null || end < total) ? end : null, total};
 }
 
+export async function roboticStock(env, productId, fetcher = fetch) {
+  const selected=decodeProduct(productId),result=await request(env,`/api/v2/products/${encodeURIComponent(selected.productId)}`,{},fetcher),product=result.data;
+  if(!isObject(product)||product.id!==selected.productId||!Array.isArray(product.variants))throw invalid();
+  const variant=product.variants.find(v=>v.id===selected.variantId);
+  if(!variant)throw new SupplierError('Выбранный вариант ROBOTICVN SHOP не найден. Остаток не подтверждён.','supplier_product',409);
+  const stock=product.in_stock===false||variant.in_stock===false?0:variant.available_quantity;
+  if(!Number.isSafeInteger(stock)||stock<0)throw invalid();
+  return {stock,price:variant.prices?.[selected.currency],currency:selected.currency.toUpperCase()};
+}
 export async function roboticQuote(env, {productId, quantity}, fetcher = fetch) {
   const selected = decodeProduct(productId);
   validateQuantity(quantity);

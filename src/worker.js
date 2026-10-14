@@ -1,7 +1,8 @@
 import {handleApi, securityHeaders} from './api.js';
 import {runAutomation} from './automation.js';
+import {runStockSync} from './stock-sync.js';
 export default {
-  async scheduled(event,env,ctx){ctx.waitUntil(runAutomation({...env,REQUIRE_PASSWORD:'true'}));},
+  async scheduled(event,env,ctx){ctx.waitUntil((async()=>{await runAutomation({...env,REQUIRE_PASSWORD:'true'});await runStockSync(env);})());},
   async fetch(request, env) {
     if (new URL(request.url).pathname.startsWith('/api/')) {
       const origin = request.headers.get('Origin');

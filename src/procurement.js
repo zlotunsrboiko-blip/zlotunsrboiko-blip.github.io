@@ -10,8 +10,10 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
   const save=async value=>store.q('UPDATE jobs SET value=?,updated_at=? WHERE name=?',JSON.stringify(value),new Date().toISOString(),name).run();
   let attempt=await read();
   const provider=category.supplier_provider||'mke';
+  const kind=category.supplier_kind||category.item_kind;
   if(attempt&&(attempt.provider!==provider||String(attempt.productId)!==String(category.supplier_product_id)||attempt.quantity!==quantity))throw new SupplierError('Для этой позиции уже есть закупка с другими настройками. Проверьте её в магазине поставщика.','purchase_mapping_changed',409);
   if(attempt?.result)return unseal(await store.key(),attempt.result);
+  if(attempt&&(attempt.supplierKind||category.item_kind)!==kind)throw new SupplierError('Для этой позиции уже начата закупка с другим форматом данных. Проверьте её перед изменением формата.','purchase_mapping_changed',409);
   if(attempt?.state==='failed'&&attempt.retryable){
     if(Date.now()<attempt.retryAfter)throw new SupplierError('ROBOTICVN SHOP отклонил закупку без выдачи. Повторная проверка — через минуту.','supplier_retry_later',409);
     const cleared=await store.q('DELETE FROM jobs WHERE name=? AND value=?',name,JSON.stringify(attempt)).run();
@@ -24,7 +26,7 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
       const wallet=await roboticAccount(env,fetcher),balance=wallet.balances.find(x=>x.currency===quote.currency)?.balance;
       if(balance===undefined||balance<quote.total)throw new SupplierError(`Недостаточно средств в кошельке ROBOTICVN SHOP (${quote.currency}). Пополните баланс; проверка повторится автоматически.`,'insufficient_balance',409);
     }
-    const initial={provider,productId:category.supplier_product_id,quantity,state:'starting',startedAt:new Date().toISOString()};
+    const initial={provider,productId:category.supplier_product_id,quantity,supplierKind:kind,slip:category.supplier_slip||category.slip,activateTill:category.activate_till,state:'starting',startedAt:new Date().toISOString()};
     const claim=await store.q('INSERT OR IGNORE INTO jobs(name,value,updated_at) VALUES(?,?,?)',name,JSON.stringify(initial),initial.startedAt).run();
     if(!claim.meta.changes)throw new SupplierError('Закупка уже выполняется. Дождитесь следующей проверки.','purchase_busy',409);
     attempt=initial;
@@ -45,7 +47,7 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
   let result;
   if(provider==='mke'){
     const bought=await supplierBuy(env,{productId:attempt.productId,quantity,idempotencyKey:`ym-${orderId}-${itemId}`},fetcher);
-    const secrets=bought.texts.map(value=>parseSupplierCredential(category.item_kind,value));
+    const secrets=bought.texts.map(value=>parseSupplierCredential(kind,value));
     result={...bought,secrets,codes:secrets.map(deliveryText),provider};
   }else{
     if(!attempt.supplierOrderId)throw new SupplierError('ROBOTICVN SHOP: результат закупки требует проверки в магазине. Повторная покупка остановлена, чтобы не списать деньги дважды.','purchase_uncertain',409);
@@ -54,10 +56,11 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
     if(bought.items?.length!==1||bought.items[0].variantId!==decodeURIComponent(encodedVariant)||(bought.items[0].productId&&bought.items[0].productId!==decodeURIComponent(encodedProduct))||bought.quantity!==quantity||bought.currency!==currency.toUpperCase())throw new SupplierError('ROBOTICVN SHOP: состав закупки отличается от выбранного товара. Автовыдача остановлена для проверки.','supplier_order_mismatch',409);
     if(bought.status!=='delivered')throw new SupplierError('ROBOTICVN SHOP: заказ оплачен, ожидаем данные товара. Проверка повторится автоматически.','supplier_processing',409);
     if(bought.texts?.length!==quantity)throw new SupplierError('ROBOTICVN SHOP: количество выданных данных не совпадает с заказом. Повторная покупка остановлена.','supplier_items',409);
-    const secrets=category.item_kind==='code'?bought.texts.map(code=>({kind:'code',code,note:'ROBOTICVN SHOP'})):bought.credentials;
-    if(category.item_kind==='account'&&(!secrets||secrets.some(c=>!c.login||!c.password)))throw new SupplierError('ROBOTICVN SHOP: формат данных не соответствует категории «Аккаунт». Проверьте заказ поставщика.','supplier_format',409);
+    const secrets=kind==='code'?bought.texts.map(code=>({kind:'code',code,note:'ROBOTICVN SHOP'})):bought.credentials;
+    if(kind==='account'&&(!secrets||secrets.some(c=>!c.login||!c.password)))throw new SupplierError('ROBOTICVN SHOP: формат данных не соответствует настройке закупки «Аккаунт». Проверьте заказ поставщика.','supplier_format',409);
     result={...bought,secrets,codes:bought.texts,provider};
   }
+  result={...result,slip:attempt.slip||category.supplier_slip||category.slip,activateTill:attempt.activateTill||category.activate_till};
   await save({...attempt,state:'delivered',supplierOrderId:result.supplierOrderId,result:await seal(await store.key(),result)});
   await store.audit(String(orderId),`supplier_purchased:provider=${provider},order=${result.supplierOrderId},qty=${quantity}`);
   return result;

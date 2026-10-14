@@ -2,6 +2,10 @@ import {Inventory, StoreError} from './inventory.js';
 import {SupplierError,supplierAccount,supplierProducts} from './supplier.js';
 import {roboticAccount,roboticProducts} from './roboticvn.js';
 import {SessionError,rememberDeviceAvailable,requestSession,createSession,verifySession,revokeSession} from './sessions.js';
+import {StockError,stockConfig,stockDecision} from './stock-policy.js';
+import {stockStates} from './stock-sync.js';
+import {marketStocks} from './market-stock.js';
+import {supplierStock} from './supplier-stock.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
@@ -149,10 +153,32 @@ export async function handleApi(req, env, fetcher = fetch) {
       const products=await supplierProducts(env,fetcher);return json({configured:true,provider,nextOffset:null,products:products.map(x=>({id:x.id,name:x.name_en,price:x.price_usd,currency:'USD',stock:x.stock,instant:x.instant,activationUrl:x.activation_url}))});
     }
     const store=env.DB?new Inventory(env):null;
+    if(route.startsWith('/api/stock-sync/')){
+      if(!store)throw new StoreError('Онлайн-хранилище не подключено.',503);
+      const stockMarket=marketStocks(env,fetcher);
+      if(route==='/api/stock-sync/targets'&&req.method==='GET')return json({targets:await stockMarket.targets()});
+      if(route==='/api/stock-sync/status'&&req.method==='GET')return json({states:await stockStates(store)});
+      if(route==='/api/stock-sync/preview'&&req.method==='POST'){
+        const input=await body(req),c=(await store.categories()).find(c=>c.id===input.categoryId);
+        if(!c)throw new ApiError('Сначала сохраните категорию.');
+        const config=stockConfig({...c.stock_sync,...input.config});
+        if(!config.target)throw new ApiError('Выберите склад для проверки.');
+        if(!(await stockMarket.targets()).some(t=>t.id===config.target))throw new ApiError('Склад не найден среди доступных складов Маркета.');
+        const supplier=await supplierStock(env,c,fetcher),local=Number(c.available),current=await stockMarket.read(config.target,c.offer_id),previous=(await stockStates(store))[c.id]||{};
+        return json({localStock:local,supplierStock:supplier.stock,...stockDecision(config,previous,{total:local+supplier.stock,current})});
+      }
+    }
     if(route.startsWith('/api/pool/')||route.startsWith('/api/ledger')){
       if(!store)throw new StoreError('Онлайн-хранилище ещё не подключено. См. SETUP.md.',503);
       if(route==='/api/pool/categories'&&req.method==='GET')return json({categories:await store.categories()});
-      if(route==='/api/pool/categories'&&req.method==='POST')return json(await store.saveCategory(await body(req)));
+      if(route==='/api/pool/categories'&&req.method==='POST'){
+        const input=await body(req);
+        if(input.stockSync?.enabled){
+          const config=stockConfig(input.stockSync),old=input.id?(await store.categories()).find(c=>c.id===input.id):null;
+          if(!old?.stock_sync.enabled||old.stock_sync.target!==config.target){if(!(await marketStocks(env,fetcher).targets()).some(t=>t.id===config.target))throw new ApiError('Выберите доступный склад Маркета.');}
+        }
+        return json(await store.saveCategory(input));
+      }
       if(route==='/api/pool/items'&&req.method==='GET')return json(await store.list(p));
       if(route==='/api/pool/items'&&req.method==='POST')return json(await store.saveItems(await body(req)));
       if(route==='/api/pool/reveal'&&req.method==='POST')return json(await store.reveal((await body(req)).id));
@@ -258,7 +284,7 @@ export async function handleApi(req, env, fetcher = fetch) {
     }
     throw new ApiError('Метод не найден.', 404);
   } catch (error) {
-    const known=error instanceof ApiError||error instanceof StoreError||error instanceof SupplierError||error instanceof SessionError;
+    const known=error instanceof ApiError||error instanceof StoreError||error instanceof SupplierError||error instanceof SessionError||error instanceof StockError;
     return json({error:known?error.message:'Не удалось обработать запрос.', uncertain: !!error.uncertain},known?error.status:500);
   }
 }
