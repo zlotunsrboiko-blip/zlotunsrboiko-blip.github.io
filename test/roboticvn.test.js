@@ -116,6 +116,13 @@ test('ROBOTICVN delivery preserves multiline supplementary data and does not dup
   assert.equal(result.credentials[0].additionalInfo, record.additional_info);
 });
 
+test('ROBOTICVN accepts live order details without quantity only with linked unit deliveries', async () => {
+  const detail={...order,items:order.items.map(({quantity,...item})=>item)};
+  const record={item_id:'item_1',quantity:1,account:'link',password:'https://example.test/redeem'};
+  const result=await roboticOrder(env,'order_1',async url=>Response.json(new URL(url).pathname.endsWith('/delivery')?{delivered_accounts:[record]}:{data:detail}));
+  assert.equal(result.quantity,1);assert.equal(result.status,'delivered');
+  await assert.rejects(roboticOrder(env,'order_1',async url=>Response.json(new URL(url).pathname.endsWith('/delivery')?{delivered_accounts:[{...record,item_id:'wrong'}]}:{data:detail})),{code:'supplier_response'});
+});
 test('ROBOTICVN pending credentials are polled without guessing undocumented statuses', async () => {
   const result = await roboticOrder(env, 'order_1', async url => Response.json(new URL(url).pathname.endsWith('/delivery') ? {deliveredAccount: [], delivered_accounts: []} : {data: {...order, status: 'some_future_status'}}));
   assert.equal(result.status, 'processing');

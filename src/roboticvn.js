@@ -163,12 +163,22 @@ function deliveryRecord(record) {
 export async function roboticOrder(env, orderId, fetcher = fetch) {
   if (typeof orderId !== 'string' || !orderId || orderId.length > 300) throw new SupplierError('Не указан номер закупки ROBOTICVN SHOP.', 'supplier_order', 400);
   const result = await request(env, `/api/v2/orders/${encodeURIComponent(orderId)}`, {}, fetcher);
-  const order = result.data;
+  let order = result.data;
+  const delivery = await request(env, `/api/v2/orders/${encodeURIComponent(orderId)}/delivery`, {}, fetcher);
+  const deliveredRows = Array.isArray(delivery.delivered_accounts) ? delivery.delivered_accounts : delivery.deliveredAccount;
+  // Some live order details omit quantity; recover it only from explicitly linked delivery records.
+  if (isObject(order) && Array.isArray(order.items) && Array.isArray(deliveredRows)) {
+    order = {...order, items: order.items.map(item => {
+      if (item.quantity != null) return item;
+      const linked = deliveredRows.filter(row => row?.item_id === item.id);
+      if (!linked.length || linked.some(row => row.quantity !== 1)) return item;
+      return {...item, quantity: linked.length};
+    })};
+  }
   if (!isObject(order) || order.id !== orderId || !Array.isArray(order.items) || !order.items.length || order.items.some(item => !integer(item.quantity) || typeof item.id !== 'string' || !item.id)) throw invalid();
   const quantity = order.items.reduce((sum, item) => sum + item.quantity, 0);
   if (!integer(quantity)) throw invalid();
   const base = {supplierOrderId: orderId, quantity, rawStatus: typeof order.status === 'string' ? order.status : '', paymentStatus: typeof order.payment_status === 'string' ? order.payment_status : '', items: order.items.map(item => ({id: item.id, productId: item.product_id, variantId: item.variant_id, quantity: item.quantity})), currency: typeof order.currency_code === 'string' ? order.currency_code.toUpperCase() : '', total: amount(order.total) ? order.total : null};
-  const delivery = await request(env, `/api/v2/orders/${encodeURIComponent(orderId)}/delivery`, {}, fetcher);
   // Both names are documented aliases of the same data. Never concatenate them.
   const rows = Array.isArray(delivery.delivered_accounts) ? delivery.delivered_accounts : delivery.deliveredAccount;
   if (!Array.isArray(rows) || rows.length > quantity) throw invalid();
