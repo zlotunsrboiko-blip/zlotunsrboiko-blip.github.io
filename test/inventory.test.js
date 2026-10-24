@@ -14,6 +14,16 @@ async function setup(){
   async function api(path,input){const response=await handleApi(new Request('https://example.test'+path,{method:input===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-App-Password':env.APP_PASSWORD},body:input===undefined?undefined:JSON.stringify(input)}),env,mock.fetcher);return {status:response.status,data:await response.json()};}
   return {env,store,mock,category,api};
 }
+test('manual data can replace a rejected delivery but never an uncertain delivery',async()=>{
+  const {env,store,mock,api}=await setup(),orderId=84729105;
+  await store.prepare(mock.orders[0]);await store.outcome(orderId,'rejected');
+  const input={orderId,items:[{id:1,codes:['new-manual-value'],slip:'Manual instructions',activate_till:'2036-01-01'}]};
+  assert.equal((await api('/api/deliver',input)).status,200);
+  assert.equal((await store.orderSecrets(String(orderId))).units[0].secret.code,'new-manual-value');
+  assert.equal((await store.categories())[0].available,2);
+  await store.outcome(orderId,'uncertain');
+  assert.equal((await api('/api/deliver',input)).status,409);env.DB.close();
+});
 test('pool ciphertext, duplicate identities, revision conflict, blocked stock',async()=>{
   const {env,store,category}=await setup();
   await assert.rejects(store.saveItems({categoryId:category.id,items:[{kind:'code',code:'WRONG-TYPE'}]}),/только аккаунты/);

@@ -115,6 +115,17 @@ export async function handleApi(req, env, fetcher = fetch) {
         if (status === 404) message = 'Заказ или чат не найден либо больше недоступен.';
         if (status === 420 || status === 429) message = 'Маркет ограничил запросы. Подождите немного и обновите данные.';
         if (mutation && status >= 500) message = 'Ошибка на стороне Маркета. Результат отправки неизвестен — проверьте его перед повтором.';
+        if(path.endsWith('/deliverDigitalGoods')&&Array.isArray(result.errors)){
+          const sensitive=[key,...(data?.items||[]).flatMap(item=>[...(item.codes||[]),item.slip])].filter(x=>typeof x==='string'&&x.length>3);
+          const details=result.errors.slice(0,3).map(error=>{
+            let value=String(error.message||'');
+            for(const secret of sensitive)value=value.split(secret).join('[скрыто]');
+            value=value.replace(/https?:\/\/\S+|[\w.+-]+@[\w.-]+\.[a-z]+|[A-Za-z0-9_=-]{32,}/gi,'[скрыто]').replace(/[\r\n]+/g,' ').slice(0,300);
+            const code=typeof error.code==='string'&&/^[A-Z_0-9.-]{1,60}$/i.test(error.code)?error.code:'';
+            return [code,value].filter(Boolean).join(': ');
+          }).filter(Boolean);
+          if(details.length)message+=' Причина Маркета: '+details.join('; ');
+        }
         throw new ApiError(message, status, mutation && status >= 500);
       }
       return result;
@@ -242,7 +253,10 @@ export async function handleApi(req, env, fetcher = fetch) {
       let payload=input;
       if(store){
         let prepared=await store.prepared(input.orderId);
-        if(prepared&&input.items)throw new StoreError('У заказа уже есть сохранённая выдача. Откройте её в разделе «Учёт заказов».',409);
+        if(prepared&&input.items){
+          if(prepared.state!=='rejected')throw new StoreError('У заказа уже есть сохранённая выдача. Откройте её в разделе «Учёт заказов».',409);
+          validateDelivery(input,order);await store.replaceRejected(input);prepared=await store.prepared(input.orderId);
+        }
         if(!prepared){validateDelivery(input,order);await store.prepare(order,input.items,isTest);prepared=await store.prepared(input.orderId);}
         payload=prepared.payload;
       }
@@ -252,6 +266,7 @@ export async function handleApi(req, env, fetcher = fetch) {
         await market(`/v2/campaigns/${campaign}/orders/${id(input.orderId)}/deliverDigitalGoods`, {items}, true);
       }catch(e){
         if(store)await store.outcome(input.orderId,e.uncertain?'uncertain':'rejected');
+        if(store)await store.audit(String(input.orderId),`delivery_error:${e.message}`);
         throw e;
       }
       if(store){

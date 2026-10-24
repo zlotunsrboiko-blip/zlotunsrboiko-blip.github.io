@@ -215,6 +215,15 @@ export class Inventory {
     try{await this.db.batch(statements);}catch{throw new StoreError('Резерв изменился в другом окне. Обновите заказ; повторной выдачи не было.',409);}
     return {orderId,items};
   }
+  async replaceRejected(input){
+    const id=String(input.orderId),previous=await this.prepared(id),t=now();
+    if(!previous||previous.state!=='rejected')throw new StoreError('Заменять можно только выдачу, которую Маркет отклонил.',409);
+    const key=await this.key(),items=input.items.map(item=>({id:item.id,codes:item.codes,slip:item.slip,activate_till:item.activate_till}));
+    const statements=[this.q("UPDATE deliveries SET state=CASE WHEN state='rejected' AND updated_at=? THEN 'prepared' ELSE NULL END,payload=?,updated_at=? WHERE order_id=?",previous.updated_at,await seal(key,{orderId:id,items}),t,id),this.q("UPDATE inventory SET status='available',order_id=NULL,item_id=NULL,updated_at=?,version=version+1 WHERE order_id=? AND status='reserved'",t,id),this.q('DELETE FROM delivery_units WHERE order_id=?',id)];
+    for(const item of items)for(let i=0;i<item.codes.length;i++)statements.push(this.q('INSERT INTO delivery_units VALUES(?,?,?,?,?)',id,String(item.id),i,null,await seal(key,{kind:'manual',code:item.codes[i]})));
+    statements.push(this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,'rejected_delivery_replaced',t));
+    try{await this.db.batch(statements);}catch{throw new StoreError('Состояние выдачи изменилось. Обновите заказ перед повтором.',409);}
+  }
   async claim(id){
     const r=await this.q("UPDATE deliveries SET state='sending',updated_at=? WHERE order_id=? AND state IN ('prepared','rejected')",now(),String(id)).run();
     if(!r.meta.changes)throw new StoreError('Повторная отправка заблокирована. Проверьте состояние выдачи.',409);
