@@ -2,6 +2,14 @@ import {SupplierError,supplierBuy,parseSupplierCredential} from './supplier.js';
 import {roboticQuote,roboticAccount,roboticCreateOrder,roboticOrder} from './roboticvn.js';
 import {seal,unseal,deliveryText} from './inventory.js';
 
+// Some link products arrive in the supplier's `password` field with a numeric
+// `account` reference. For a code/link category, send the URL itself as the key.
+function supplierLink(credential){
+  const value=credential?.password;
+  if(typeof value!=='string'||/\s/.test(value))return null;
+  try{const url=new URL(value);return url.protocol==='https:'&&url.hostname&& !url.username&&!url.password?value:null;}catch{return null;}
+}
+
 // An attempt belongs to a Market order line, not to the current category mapping.
 // Changing providers must never initiate a second purchase for the same line.
 export async function procure(store,env,{orderId,itemId,category,quantity},fetcher=fetch){
@@ -56,12 +64,22 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
     if(bought.items?.length!==1||bought.items[0].variantId!==decodeURIComponent(encodedVariant)||(bought.items[0].productId&&bought.items[0].productId!==decodeURIComponent(encodedProduct))||bought.quantity!==quantity||bought.currency!==currency.toUpperCase())throw new SupplierError('ROBOTICVN SHOP: состав закупки отличается от выбранного товара. Автовыдача остановлена для проверки.','supplier_order_mismatch',409);
     if(bought.status!=='delivered')throw new SupplierError('ROBOTICVN SHOP: заказ оплачен, ожидаем данные товара. Проверка повторится автоматически.','supplier_processing',409);
     if(bought.texts?.length!==quantity)throw new SupplierError('ROBOTICVN SHOP: количество выданных данных не совпадает с заказом. Повторная покупка остановлена.','supplier_items',409);
-    const secrets=kind==='code'?bought.texts.map(code=>({kind:'code',code,note:'ROBOTICVN SHOP'})):bought.credentials;
+    const codes=kind==='code'?bought.texts.map((text,index)=>supplierLink(bought.credentials?.[index])||text):bought.texts;
+    const secrets=kind==='code'?codes.map(code=>({kind:'code',code,note:'ROBOTICVN SHOP'})):bought.credentials;
     if(kind==='account'&&(!secrets||secrets.some(c=>!c.login||!c.password)))throw new SupplierError('ROBOTICVN SHOP: формат данных не соответствует настройке закупки «Аккаунт». Проверьте заказ поставщика.','supplier_format',409);
-    result={...bought,secrets,codes:bought.texts,provider};
+    result={...bought,secrets,codes,provider};
   }
   result={...result,slip:attempt.slip||category.supplier_slip||category.slip,activateTill:attempt.activateTill||category.activate_till};
   await save({...attempt,state:'delivered',supplierOrderId:result.supplierOrderId,result:await seal(await store.key(),result)});
   await store.audit(String(orderId),`supplier_purchased:provider=${provider},order=${result.supplierOrderId},qty=${quantity}`);
+  // A purchase changes the shared wallet. Recalculate every listing using this
+  // supplier on the next scheduled stock pass, including other product cards.
+  try{
+    for(const c of await store.categories()){
+      if(!c.stock_sync?.enabled||!c.supplier_enabled||c.supplier_provider!==provider)continue;
+      const name='stock-state:'+c.id,row=await store.q('SELECT value FROM jobs WHERE name=?',name).first();
+      if(row){const value=JSON.parse(row.value);await store.q('UPDATE jobs SET value=? WHERE name=? AND value=?',JSON.stringify({...value,nextCheckAt:0}),name,row.value).run();}
+    }
+  }catch{} // Delivery must continue even if scheduling an early stock refresh fails.
   return result;
 }

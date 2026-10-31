@@ -32,6 +32,10 @@ test('zero requires five continuous hours, positive stock and long gaps restart 
   assert.equal(stockDecision(settings,positive.state,{total:0,current:11,now:start+310*MIN}).state.zeroSince,start+310*MIN);
   const gap=stockDecision(settings,previous,{total:0,current:11,now:start+400*MIN});assert.equal(gap.count,null);assert.equal(gap.state.zeroSince,start+400*MIN);
 });
+test('zero purchasing power removes a listing immediately',()=>{
+  assert.equal(stockDecision(settings,{}, {total:0,current:3,now:start,immediateZero:true}).count,0);
+  assert.equal(stockDecision(settings,{}, {total:0,current:3,now:start}).count,null);
+});
 test('rules reject invalid numbers, missing target and too-frequent polling',()=>{
   for(const input of [{percent:0},{percent:101},{percent:NaN},{intervalMinutes:1},{thresholdPercent:0},{zeroHours:-1},{target:'warehouse:bad'},{enabled:true,target:''}])assert.throws(()=>stockConfig({...settings,...input}));
   assert.equal(stockConfig().enabled,false);
@@ -39,11 +43,11 @@ test('rules reject invalid numbers, missing target and too-frequent polling',()=
 async function setup(t,{enabled=true,provider='mke',target=settings.target}={}){
   const env={DB:localDB(),DATA_ENCRYPTION_KEY:Buffer.alloc(32,1).toString('base64'),YANDEX_API_KEY:'test-market',YANDEX_BUSINESS_ID:'216918278',YANDEX_CAMPAIGN_ID:'149189839',MKE_API_KEY:'test-mke',ROBOTICVN_API_KEY:'test-robotic',APP_PASSWORD:'test-password-long-enough'};t.after(()=>env.DB.close());
   const store=new Inventory(env),input={name:'Test',offerId:'SKU',kind:'account',slip:'Local instructions',activateTill:'2099-01-01',supplierKind:'code',supplierEnabled:true,supplierProductId:provider==='mke'?8:'rvn:prod:var:usd',supplierProvider:provider,stockSync:{...settings,enabled,target}},category=await store.saveCategory(input);
-  const calls=[],writes=[],remote={stock:30,current:1,failSupplier:false,failWrite:false};
+  const calls=[],writes=[],remote={stock:30,current:1,balance:100,failSupplier:false,failWrite:false};
   const fetcher=async(url,options={})=>{
     const u=new URL(url),data=JSON.parse(options.body||'{}');calls.push({url:u,options,data});
-    if(u.hostname==='api.technysoft.com'){if(remote.failSupplier)throw new Error('offline');return Response.json([{id:8,stock:remote.stock,instant:true,price_usd:1}]);}
-    if(u.hostname==='api.roboticvn.com'){if(remote.failSupplier)throw new Error('offline');return Response.json({data:{id:'prod',in_stock:true,variants:[{id:'var',in_stock:remote.stock>0,available_quantity:remote.stock,prices:{usd:1}}]}});}
+    if(u.hostname==='api.technysoft.com'){if(remote.failSupplier)throw new Error('offline');return u.pathname==='/v1/me'?Response.json({balance:remote.balance,currency:'USD'}):Response.json([{id:8,stock:remote.stock,instant:true,price_usd:1}]);}
+    if(u.hostname==='api.roboticvn.com'){if(remote.failSupplier)throw new Error('offline');return u.pathname==='/api/v2/wallet/balance'?Response.json({data:{usd:remote.balance}}):Response.json({data:{id:'prod',in_stock:true,variants:[{id:'var',in_stock:remote.stock>0,available_quantity:remote.stock,prices:{usd:1}}]}});}
     if(u.pathname==='/v3/businesses/216918278/warehouses')return Response.json({result:{warehouses:[{id:45,name:'DBS',models:[{placementType:'DBS',apiAvailability:'AVAILABLE'}]}]}});
     if(u.pathname.includes('/offers/stocks')){
       if(options.method==='PUT'||u.pathname.endsWith('/update')){if(remote.failWrite)return Response.json({status:'ERROR'},{status:503});const count=data.skus?.[0].items[0].count??data.skuItems?.[0].count;writes.push(count);remote.current=count;return Response.json({status:'OK'});}
@@ -76,6 +80,14 @@ test('own available pool contributes to quantity; reserved and blocked units do 
   await x.store.q("UPDATE inventory SET status='blocked' WHERE id=(SELECT id FROM inventory ORDER BY id LIMIT 1)").run();
   await runStockSync(x.env,x.fetcher,start);assert.equal(x.remote.current,1);const s=(await stockStates(x.store))[x.category.id];assert.equal(s.observedTotal,1);assert.equal(s.localStock,1);assert.equal(s.zeroSince,null);
 });
+test('listing quantity follows wallet purchasing power and refills after balance rises',async t=>{
+  const x=await setup(t,{provider:'roboticvn'});x.remote.balance=3;
+  await runStockSync(x.env,x.fetcher,start);assert.deepEqual(x.writes,[2]);
+  const first=(await stockStates(x.store))[x.category.id];assert.equal(first.supplierAvailable,30);assert.equal(first.supplierStock,3);assert.equal(first.walletBalance,3);
+  x.remote.balance=1;await runStockSync(x.env,x.fetcher,start+10*MIN);assert.deepEqual(x.writes,[2,1]);
+  x.remote.balance=0;await runStockSync(x.env,x.fetcher,start+20*MIN);assert.deepEqual(x.writes,[2,1,0]);
+  x.remote.balance=5;await runStockSync(x.env,x.fetcher,start+30*MIN);assert.deepEqual(x.writes,[2,1,0,2]);
+});
 test('supplier error is not zero, resets absence tracking and does not retry each minute',async t=>{
   const x=await setup(t);x.remote.stock=0;await runStockSync(x.env,x.fetcher,start);
   x.remote.failSupplier=true;await runStockSync(x.env,x.fetcher,start+10*MIN);assert.deepEqual(x.writes,[]);assert.equal((await stockStates(x.store))[x.category.id].zeroSince,null);
@@ -94,7 +106,7 @@ test('failed stock write does not advance success baseline; next check reconcile
 });
 test('ROBOTICVN reads only selected product; v3 write includes exact warehouse and SKU',async t=>{
   const x=await setup(t,{provider:'roboticvn',target:'warehouse:45'});await runStockSync(x.env,x.fetcher,start);assert.deepEqual(x.writes,[11]);
-  const supplier=x.calls.filter(c=>c.url.hostname==='api.roboticvn.com');assert.equal(supplier.length,1);assert.equal(supplier[0].url.pathname,'/api/v2/products/prod');
+  const supplier=x.calls.filter(c=>c.url.hostname==='api.roboticvn.com');assert.equal(supplier.length,2);assert.equal(supplier[0].url.pathname,'/api/v2/products/prod');assert.equal(supplier[1].url.pathname,'/api/v2/wallet/balance');
   const write=x.calls.find(c=>c.url.pathname.endsWith('/stocks/update'));assert.deepEqual(write.data.skuItems,[{sku:'SKU',partnerWarehouseId:45,count:11,updatedAt:new Date(start).toISOString()}]);
 });
 test('missing supplier count or ambiguous Market stock never publishes zero',async t=>{

@@ -5,7 +5,7 @@ import {SessionError,rememberDeviceAvailable,requestSession,createSession,verify
 import {StockError,stockConfig,stockDecision} from './stock-policy.js';
 import {stockStates} from './stock-sync.js';
 import {marketStocks} from './market-stock.js';
-import {supplierStock} from './supplier-stock.js';
+import {affordableSupplierStock} from './supplier-stock.js';
 const ROOT = 'https://api.partner.market.yandex.ru';
 const enabled=value=>value===true||String(value).toLowerCase()==='true';
 export const securityHeaders = {
@@ -175,8 +175,8 @@ export async function handleApi(req, env, fetcher = fetch) {
         const config=stockConfig({...c.stock_sync,...input.config});
         if(!config.target)throw new ApiError('Выберите склад для проверки.');
         if(!(await stockMarket.targets()).some(t=>t.id===config.target))throw new ApiError('Склад не найден среди доступных складов Маркета.');
-        const supplier=await supplierStock(env,c,fetcher),local=Number(c.available),current=await stockMarket.read(config.target,c.offer_id),previous=(await stockStates(store))[c.id]||{};
-        return json({localStock:local,supplierStock:supplier.stock,...stockDecision(config,previous,{total:local+supplier.stock,current})});
+        const supplier=await affordableSupplierStock(env,c,fetcher),local=Number(c.available),current=await stockMarket.read(config.target,c.offer_id),previous=(await stockStates(store))[c.id]||{};
+        return json({localStock:local,supplierStock:supplier.available,supplierAvailable:supplier.stock,supplierAffordable:supplier.affordable,walletBalance:supplier.balance,walletCurrency:supplier.currency,...stockDecision(config,previous,{total:local+supplier.available,current,immediateZero:local===0&&supplier.balanceLimited&&supplier.available===0})});
       }
     }
     if(route.startsWith('/api/pool/')||route.startsWith('/api/ledger')){

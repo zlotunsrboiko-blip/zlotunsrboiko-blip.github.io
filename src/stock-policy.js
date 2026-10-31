@@ -12,12 +12,13 @@ export function stockConfig(input={}){
   return Object.fromEntries(Object.keys(STOCK_DEFAULTS).map(k=>[k,c[k]]));
 }
 // The baseline changes only after a successful update, never after small fluctuations.
-export function stockDecision(config,previous,{total,current,now=Date.now()}){
+export function stockDecision(config,previous,{total,current,now=Date.now(),immediateZero=false}){
   const state={...previous,lastCheckedAt:now,observedTotal:total,currentMarket:current,error:null};
   if(!Number.isSafeInteger(total)||total<0||!Number.isSafeInteger(current)||current<0)throw new StockError('Не подтверждено количество товара. Остаток не изменён.',502);
   const desired=total===0?0:Math.min(total,Math.ceil(total*config.percent/100));
   state.desired=desired;
   if(total===0){
+    if(immediateZero)return {state:{...state,zeroSince:now,reason:'balance_empty'},count:current===0?null:0};
     const continuous=previous.lastCheckedAt!=null&&now-previous.lastCheckedAt<=config.intervalMinutes*60000*2;
     state.zeroSince=continuous&&previous.zeroSince!=null?previous.zeroSince:now;
     if(current===0)return {state:{...state,reason:'already_zero'},count:null};

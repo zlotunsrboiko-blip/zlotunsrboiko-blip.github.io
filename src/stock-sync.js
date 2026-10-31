@@ -1,6 +1,6 @@
 import {Inventory} from './inventory.js';
 import {stockConfig,stockDecision,StockError} from './stock-policy.js';
-import {supplierStock} from './supplier-stock.js';
+import {affordableSupplierStock} from './supplier-stock.js';
 import {marketStocks} from './market-stock.js';
 export {StockError};
 const signature=c=>JSON.stringify([c.offer_id,c.item_kind,c.supplier_enabled,c.supplier_provider,c.supplier_product_id,c.stock_sync]);
@@ -27,9 +27,9 @@ export async function runStockSync(env,fetcher=fetch,now=Date.now()){
       await save(c.id,state);
       try{
         const local=Number((await store.q("SELECT COUNT(*) AS count FROM inventory WHERE category_id=? AND kind=? AND status='available'",c.id,c.item_kind).first()).count);
-        const supplier=await supplierStock(env,c,fetcher,cache),total=local+supplier.stock;
-        const current=await market.read(config.target,c.offer_id),decision=stockDecision(config,old,{total,current,now});
-        state={...state,...decision.state,localStock:local,supplierStock:supplier.stock};
+        const supplier=await affordableSupplierStock(env,c,fetcher,cache),total=local+supplier.available;
+        const current=await market.read(config.target,c.offer_id),decision=stockDecision(config,old,{total,current,now,immediateZero:local===0&&supplier.balanceLimited&&supplier.available===0});
+        state={...state,...decision.state,localStock:local,supplierStock:supplier.available,supplierAvailable:supplier.stock,supplierAffordable:supplier.affordable,walletBalance:supplier.balance,walletCurrency:supplier.currency};
         const latest=await store.categoryByOffer(c.offer_id);
         if(!latest||!latest.stock_sync.enabled||signature(latest)!==sig)continue;
         if(decision.count!==null){

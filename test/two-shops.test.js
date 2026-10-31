@@ -231,6 +231,26 @@ test('mixed-shop order polls ROBOTICVN, retains MKE purchase and sends supplemen
   assert.ok(!audit.includes('ROBOTIC-BACKUP'));
 });
 
+test('link product sends only its full activation URL as a code',async t=>{
+  const {env,store,category,dispatch}=setup(t);
+  await category({kind:'code',supplierKind:'code',supplierProvider:'roboticvn',supplierProductId:ROBOTIC_PRODUCT,supplierEnabled:true,supplierSlip:'Откройте ссылку и примите приглашение.'});
+  const link='https://serviceactivation.in/subscription/new/'+ 'A'.repeat(300);
+  const fetcher=dispatch(async url=>{
+    if(url.pathname==='/api/v2/products/12/quote')return quote();
+    if(url.pathname==='/api/v2/wallet/balance')return wallet();
+    if(url.pathname==='/api/v2/orders')return Response.json({data:{order_id:'robotic-order-501',status:'processing'}},{status:201});
+    if(url.pathname==='/api/v2/orders/robotic-order-501')return roboticOrder();
+    if(url.pathname==='/api/v2/orders/robotic-order-501/delivery')return Response.json({delivered_accounts:[{item_id:'robotic-line-1',quantity:1,account:'3052',password:link}]});
+    throw new Error('Unexpected supplier request');
+  });
+  const bought=await procure(store,env,{orderId:ORDER_ID,itemId:1,category:await store.categoryByOffer('DIGITAL-'+ORDER_ID),quantity:1},fetcher);
+  assert.deepEqual(bought.codes,[link]);
+  assert.equal(bought.secrets[0].code,link);
+  assert.equal(bought.slip,'Откройте ссылку и примите приглашение.');
+  assert.ok(!JSON.stringify(bought.codes).includes('Логин'));
+  assert.ok(!JSON.stringify(bought.codes).includes('3052'));
+});
+
 function roboticSuccess(url){
   if(url.pathname==='/api/v2/orders/robotic-order-501')return roboticOrder();
   assert.equal(url.pathname,'/api/v2/orders/robotic-order-501/delivery');
