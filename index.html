@@ -397,11 +397,13 @@ async function editItem(id){
     d.append(button('Удалить из пула',async()=>{if(!confirm('Удалить этот товар из пула без возможности восстановления?'))return;try{await post('/api/pool/delete',{id,version:row.version});d.close();await loadPool();toast('Товар удалён из пула.');}catch(e){notice(e.message);}},'button quiet'));
   }catch(e){notice(e.message);}
 }
-async function refreshPoolDetails(){
+async function refreshPoolDetails(forceCatalog=false){
   const generation=++poolMetadataGeneration;
   void api('/api/stock-sync/status').then(data=>{if(generation===poolMetadataGeneration){stockSyncStates=data.states||{};renderCategoryCards();}}).catch(()=>{});
   await Promise.all([...Object.keys(poolShops).map(async provider=>{
     if(generation!==poolMetadataGeneration)return;
+    const previous=supplierShops[provider];
+    if(!forceCatalog&&previous.catalogCheckedAt&&Date.now()-previous.catalogCheckedAt<300000){catalogChanged();return;}
     supplierShops[provider]={...supplierShops[provider],catalogLoading:true,catalogError:null};catalogChanged();
     let offset=0,pages=0;const products=new Map();
     try{
@@ -409,7 +411,7 @@ async function refreshPoolDetails(){
         const result=await api(`/api/supplier/products?provider=${provider}&offset=${offset}`);
         if(generation!==poolMetadataGeneration)return;
         for(const product of result.products||[])products.set(String(product.id),product);
-        supplierShops[provider]={...supplierShops[provider],products:[...products.values()],total:result.total,catalogLoading:result.nextOffset!=null,catalogError:null};catalogChanged();
+        supplierShops[provider]={...supplierShops[provider],products:[...products.values()],total:result.total,catalogLoading:result.nextOffset!=null,catalogError:null,catalogCheckedAt:result.nextOffset==null?Date.now():null};catalogChanged();
         if(result.nextOffset==null)break;
         if(!Number.isSafeInteger(result.nextOffset)||result.nextOffset<=offset||++pages>100)throw new Error('Не удалось прочитать все страницы каталога.');
         offset=result.nextOffset;
@@ -419,7 +421,7 @@ async function refreshPoolDetails(){
   if(generation===poolMetadataGeneration){renderCategoryCards();renderPoolAutomation();}
 }
 function currentPoolFilters(){return {category:$('#pool-category').value,status:$('#pool-status').value,modes:[...poolFilters.modes].sort().join(','),providers:[...poolFilters.providers].sort().join(',')};}
-async function loadPool(more=false,refreshDetails=true){
+async function loadPool(more=false,refreshDetails=true,forceCatalog=false){
   const filters=currentPoolFilters(),moreButton=$('#pool-more'),table=$('#pool-table');
   let filterKey=new URLSearchParams(filters).toString();
   if(more&&(moreButton.disabled||poolOffset===null||filterKey!==poolLoadedFilters))return;
@@ -428,7 +430,7 @@ async function loadPool(more=false,refreshDetails=true){
   if(!more){poolOffset=null;poolLoadedFilters='';moreButton.hidden=true;table.replaceChildren(el('p','empty','Загружаем товары по выбранным фильтрам…'));$('#pool-total').textContent='Обновляем список…';}
   renderCategoryCards();
   // Catalogs and balances can be slow; filtering stock must never wait for a supplier.
-  if(refreshDetails&&!more)void refreshPoolDetails();
+  if(refreshDetails&&!more)void refreshPoolDetails(forceCatalog);
   try{
     if((refreshDetails&&!more)||!categories.length){
       const cats=await api('/api/pool/categories');if(generation!==poolGeneration)return;categories=cats.categories;
@@ -478,14 +480,14 @@ function mountPool(){
   }
   $('#pool-panel').innerHTML=`<div class="page-head"><div><p class="eyebrow">ТОВАРЫ И АВТОЗАКУПКА</p><h1>Пул товаров</h1><p class="muted">Свой запас и два магазина — в одном месте.</p></div><button id="refresh-pool" class="button">Обновить всё</button></div>
   <div class="wallets-heading"><span>Кошельки магазинов</span><button id="refresh-wallets" class="button quiet">Обновить баланс</button></div><div id="supplier-wallets" class="supplier-wallets" aria-live="polite"></div><p class="hint wallet-refresh-note">Обновляются раз в минуту, пока эта вкладка открыта. Валюты кошельков учитываются отдельно.</p>
-  <p id="pool-automation" class="pool-automation" role="status"></p><details class="pool-guide compact-guide"><summary>Как работает выдача и что означают значки</summary><p>Категория связывает артикул Маркета с данными для покупателя. Уникальный товар (1×) выдаётся один раз, универсальный (↻) повторяется для каждого заказа. Дом (⌂) — только свой пул, M и R — выбранный магазин для автозакупки.</p><p>Источник выбирается по приоритету категории: свой пул или магазин. Форматы и инструкции для этих источников задаются отдельно. Баланс и остаток показывают возможность купить одну единицу на момент проверки; они могут измениться. Для ROBOTICVN SHOP возможна задержка до получения данных.</p><p>При неизвестном результате покупки или отправки автоматический повтор останавливается. Проверьте «Учёт заказов» и журнал ошибок. Статус «Принято Маркетом» ещё не означает, что покупатель получил письмо.</p><p>В таблице «Закупка» показывает настройку категории, а не происхождение вручную добавленного товара.</p></details>
+  <p id="pool-automation" class="pool-automation" role="status"></p><details class="pool-guide compact-guide"><summary>Как работает выдача и что означают значки</summary><p>Категория связывает артикул Маркета с данными для покупателя. Уникальный товар (1×) выдаётся один раз, универсальный (↻) повторяется для каждого заказа. Дом (⌂) — только свой пул, M и R — выбранный магазин для автозакупки.</p><p>Источник выбирается по приоритету категории: свой пул или магазин. Форматы и инструкции для этих источников задаются отдельно. Остаток в Маркете ограничивается наличием поставщика и количеством, которое покрывает баланс. После закупки пересчитываются все карточки того же магазина; внешнее пополнение проверяется по расписанию.</p><p>При неизвестном результате покупки или отправки автоматический повтор останавливается. Проверьте «Учёт заказов» и журнал ошибок. Статус «Принято Маркетом» ещё не означает, что покупатель получил письмо.</p><p>В таблице «Закупка» показывает настройку категории, а не происхождение вручную добавленного товара.</p></details>
   <div class="pool-actions"><button id="new-category" class="button primary">Создать категорию</button><button id="new-item" class="button">Добавить товар</button><button id="bulk-items" class="button">Загрузить списком</button></div>
   <div class="pool-filterbar"><div id="pool-multifilters" class="pool-multifilters"></div><label>Категория<select id="pool-category"><option value="">Все категории</option></select></label><button id="pool-reset-filters" class="button quiet">Сбросить</button></div>
   <div class="category-section-head"><h2>Категории</h2><span id="category-count" class="hint"></span></div><div id="category-cards" class="category-grid"></div>
   <div class="pool-stock-head"><h2>Товары в пуле</h2><label>Статус<select id="pool-status"><option value="">Все статусы</option><option value="available">Доступен</option><option value="reserved">В резерве</option><option value="sold">Выдан</option><option value="blocked">Заблокирован</option></select></label><span id="pool-total" class="hint" aria-live="polite"></span></div><p class="hint">Выбранные выше режимы, магазины и категория применяются и к этому списку.</p><div id="pool-table"></div><button id="pool-more" class="button more" hidden>Ещё товары</button>`;
   $('#ledger-panel').innerHTML='<div class="page-head"><div><p class="eyebrow">СОХРАНЁННЫЕ АВТОМАТИЧЕСКИЕ ВЫДАЧИ</p><h1>Учёт заказов</h1><p class="muted">Здесь видны отправленные данные, инструкция и состояние каждого заказа.</p></div><button id="refresh-ledger" class="button">Обновить</button></div><p id="automation-status" class="hint"></p><details><summary>Журнал автовыдачи и ошибок</summary><p class="hint">Если выдача не состоялась, здесь появятся номер заказа и причина.</p><ul id="automation-events"></ul></details><form id="ledger-filter" class="filters"><label>Номер заказа<input id="ledger-search" inputmode="numeric" placeholder="Все заказы"></label><button class="button">Найти</button></form><div id="ledger-table"></div><button id="ledger-more" class="button more" hidden>Ещё заказы</button>';
   const mountFilters=()=>$('#pool-multifilters').replaceChildren(checkboxFilter('Режим','modes',[['unique','Уникальные'],['reusable','Универсальные']]),checkboxFilter('Закупка','providers',[['local','Свой пул'],['mke','MKE SHOP'],['roboticvn','ROBOTICVN SHOP']]));mountFilters();renderWallets();renderPoolAutomation();
-  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool();$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool(false,false);$('#pool-more').onclick=()=>loadPool(true,false);
+  $('#new-category').onclick=()=>categoryEditor();$('#new-item').onclick=addItem;$('#bulk-items').onclick=bulkItems;$('#refresh-pool').onclick=()=>loadPool(false,true,true);$('#refresh-wallets').onclick=refreshWallets;$('#pool-category').onchange=$('#pool-status').onchange=()=>loadPool(false,false);$('#pool-more').onclick=()=>loadPool(true,false);
   $('#pool-reset-filters').onclick=()=>{poolFilters.modes=new Set(['unique','reusable']);poolFilters.providers=new Set(['local','mke','roboticvn']);$('#pool-category').value=$('#pool-status').value='';mountFilters();loadPool(false,false);};
   document.addEventListener('click',event=>{document.querySelectorAll('.checkbox-filter[open]').forEach(filter=>{if(!filter.contains(event.target))filter.open=false;});});
   $('#refresh-ledger').onclick=()=>loadLedger();$('#ledger-more').onclick=()=>loadLedger(true);$('#ledger-filter').onsubmit=e=>{e.preventDefault();loadLedger();};

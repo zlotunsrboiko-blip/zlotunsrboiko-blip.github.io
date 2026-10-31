@@ -251,6 +251,21 @@ test('link product sends only its full activation URL as a code',async t=>{
   assert.ok(!JSON.stringify(bought.codes).includes('3052'));
 });
 
+test('one supplier purchase schedules every card sharing that wallet for recalculation',async t=>{
+  const {env,store,category,dispatch}=setup(t);
+  const sync={enabled:true,target:'warehouse:45',percent:100,intervalMinutes:10,zeroHours:0,thresholdPercent:1};
+  const go=await category({name:'Go',offerId:'GO',supplierProductId:18,supplierEnabled:true,supplierKind:'code',stockSync:sync});
+  const plus=await category({name:'Plus',offerId:'PLUS',supplierProductId:63,supplierEnabled:true,supplierKind:'code',stockSync:sync});
+  for(const c of [go,plus])await store.q('INSERT INTO jobs(name,value,updated_at) VALUES(?,?,?)','stock-state:'+c.id,JSON.stringify({nextCheckAt:123456789}),new Date().toISOString()).run();
+  await procure(store,env,{orderId:ORDER_ID,itemId:1,category:await store.categoryByOffer('GO'),quantity:1},dispatch(async url=>{
+    assert.equal(url.pathname,'/v1/buy');return Response.json({order:{id:99,status:'delivered',items:[{type:'text',content:'GO-CODE'}]}});
+  }));
+  for(const c of [go,plus]){
+    const row=await store.q('SELECT value FROM jobs WHERE name=?','stock-state:'+c.id).first();
+    assert.equal(JSON.parse(row.value).nextCheckAt,0);
+  }
+});
+
 function roboticSuccess(url){
   if(url.pathname==='/api/v2/orders/robotic-order-501')return roboticOrder();
   assert.equal(url.pathname,'/api/v2/orders/robotic-order-501/delivery');
