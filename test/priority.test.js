@@ -25,7 +25,7 @@ test('one SKU consumes manual account first then buys a CDK with its own instruc
   const x=await setup(t);await runAutomation(x.env,x.fetcher);
   let delivery=x.market.calls.find(c=>c.path.endsWith('/deliverDigitalGoods')).data.items[0];assert.match(delivery.codes[0],/manual@example.test/);assert.equal(delivery.slip,'Account instruction');assert.equal(x.remote.calls.length,0);
   const order=structuredClone(x.market.orders[0]);order.id=84729999;order.status='PROCESSING';x.market.orders.push(order);
-  await runAutomation(x.env,x.fetcher);delivery=x.market.calls.filter(c=>c.path.endsWith('/deliverDigitalGoods')).at(-1).data.items[0];assert.deepEqual(delivery.codes,['CDK-ONLY-123']);assert.equal(delivery.slip,'Activate CDK here');assert.equal(x.remote.calls.filter(x=>x==='/v1/buy').length,1);
+  await runAutomation(x.env,x.fetcher);delivery=x.market.calls.filter(c=>c.path.endsWith('/deliverDigitalGoods')).at(-1).data.items[0];assert.deepEqual(delivery.codes,['CDK-ONLY-123']);assert.ok(delivery.slip.startsWith('Activate CDK here'));assert.equal(x.remote.calls.filter(x=>x==='/v1/buy').length,1);
   assert.equal((await x.store.categories())[0].item_kind,'account');
 });
 test('supplier priority buys CDK while preserving available manual account',async t=>{
@@ -50,3 +50,4 @@ test('old editor saves preserve split format and priority; inventory history rem
   const x=await setup(t,'supplier_first');const {supplierKind,supplierSlip,deliveryPriority,...legacy}=x.input;await x.store.saveCategory({...legacy,id:x.category.id});const c=await x.store.categoryByOffer(x.input.offerId);assert.equal(c.supplier_kind,'code');assert.equal(c.supplier_slip,'Activate CDK here');assert.equal(c.delivery_priority,'supplier_first');assert.equal((await x.store.categories())[0].available,1);
   await assert.rejects(x.store.saveCategory({...x.input,id:x.category.id,kind:'code'}),/Тип категории нельзя/);
 });
+

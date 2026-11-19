@@ -91,6 +91,16 @@ test('expired activation date blocks procurement before either shop can charge',
   });
 });
 
+test('MKE CDK delivery includes the purchased activation URL in its saved and sent instruction',async t=>{
+  const {env,store,category,dispatch,market}=setup(t);
+  await category({kind:'code',supplierProductId:18,supplierEnabled:true});
+  const fetcher=dispatch(async()=>Response.json({order:{id:502,status:'delivered',activation_url:'https://activation.example/current-go',items:[{type:'text',content:'CDK-TEST'}]}}));
+  assert.equal((await runAutomation(env,fetcher)).delivered,1);
+  const sent=market.calls.find(c=>c.path.endsWith('/deliverDigitalGoods')).data.items[0];
+  assert.equal(sent.codes[0],'CDK-TEST');assert.match(sent.slip,/Актуальная ссылка для активации: https:\/\/activation.example\/current-go/);
+  assert.match(sent.slip,/в день покупки/);assert.match(sent.slip,/через ваш заказ/);assert.match(sent.slip,/формат ключей/);
+  const saved=await store.orderSecrets(ORDER_ID);assert.equal(saved.instructions[0].slip,sent.slip);
+});
 test('existing MKE automatic purchase uses its key, stays idempotent and delivers once',async t=>{
   const {env,store,category,dispatch,market}=setup(t);
   await category({supplierProductId:12,supplierEnabled:true});

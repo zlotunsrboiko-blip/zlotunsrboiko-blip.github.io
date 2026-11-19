@@ -10,6 +10,25 @@ function supplierLink(credential){
   try{const url=new URL(value);return url.protocol==='https:'&&url.hostname&& !url.username&&!url.password?value:null;}catch{return null;}
 }
 
+export function withActivationLink(result,provider,kind){
+  if(provider!=='mke'||kind!=='code')return result;
+  const notice='Желательно активировать подписку в день покупки.\n\nЕсли сайт активации недоступен или активировать ключ не получается, напишите продавцу напрямую через ваш заказ на Яндекс Маркете. Возможно, сайт активации перестал работать или его адрес изменился.\n\nПоставщик может обновлять сайты активации и формат ключей — такие изменения возможны и сами по себе не означают, что с покупкой что-то не так. Продавец поможет уточнить актуальную ссылку и разобраться с активацией.';
+  let slip=String(result.slip||'');
+  if(slip.endsWith(notice))return result;
+  if(!result.activationUrl){
+    const updated=slip+'\n\n'+notice;
+    if(updated.length>10000)throw new SupplierError('Инструкция MKE SHOP превышает 10 000 символов. Сократите инструкцию категории.','supplier_instruction_length',409);
+    return {...result,slip:updated};
+  }
+  let url;
+  try{url=new URL(result.activationUrl);}catch{throw new SupplierError('MKE SHOP вернул некорректную ссылку активации.','supplier_activation_url',409);}
+  if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw new SupplierError('MKE SHOP вернул некорректную ссылку активации.','supplier_activation_url',409);
+  const line=`Актуальная ссылка для активации: ${url.href}`;
+  const updated=slip+(slip.endsWith(line)?'':`\n\n${line}`)+'\n\n'+notice;
+  if(updated.length>10000)throw new SupplierError('Инструкция со ссылкой MKE SHOP превышает 10 000 символов. Сократите инструкцию категории.','supplier_instruction_length',409);
+  return {...result,slip:updated};
+}
+
 // An attempt belongs to a Market order line, not to the current category mapping.
 // Changing providers must never initiate a second purchase for the same line.
 export async function procure(store,env,{orderId,itemId,category,quantity},fetcher=fetch){
@@ -20,7 +39,7 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
   const provider=category.supplier_provider||'mke';
   const kind=category.supplier_kind||category.item_kind;
   if(attempt&&(attempt.provider!==provider||String(attempt.productId)!==String(category.supplier_product_id)||attempt.quantity!==quantity))throw new SupplierError('Для этой позиции уже есть закупка с другими настройками. Проверьте её в магазине поставщика.','purchase_mapping_changed',409);
-  if(attempt?.result)return unseal(await store.key(),attempt.result);
+  if(attempt?.result)return withActivationLink(await unseal(await store.key(),attempt.result),provider,kind);
   if(attempt&&(attempt.supplierKind||category.item_kind)!==kind)throw new SupplierError('Для этой позиции уже начата закупка с другим форматом данных. Проверьте её перед изменением формата.','purchase_mapping_changed',409);
   if(attempt?.state==='failed'&&attempt.retryable){
     if(Date.now()<attempt.retryAfter)throw new SupplierError('ROBOTICVN SHOP отклонил закупку без выдачи. Повторная проверка — через минуту.','supplier_retry_later',409);
@@ -70,6 +89,7 @@ export async function procure(store,env,{orderId,itemId,category,quantity},fetch
     result={...bought,secrets,codes,provider};
   }
   result={...result,slip:attempt.slip||category.supplier_slip||category.slip,activateTill:attempt.activateTill||category.activate_till};
+  result=withActivationLink(result,provider,kind);
   await save({...attempt,state:'delivered',supplierOrderId:result.supplierOrderId,result:await seal(await store.key(),result)});
   await store.audit(String(orderId),`supplier_purchased:provider=${provider},order=${result.supplierOrderId},qty=${quantity}`);
   // A purchase changes the shared wallet. Recalculate every listing using this
