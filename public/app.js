@@ -47,8 +47,8 @@ function buildOrder(order) {
     group.append(el('p','hint',`${item.count} шт. · Артикул: ${item.offerId||'не указан'} · ID ${item.id}`));
     const grid=el('div','fields'),codes=field(Number(item.count)===1?'Ключ или данные для покупателя':'Ключи — по одному на строку','textarea',{rows:4,required:true,spellcheck:false,placeholder:Number(item.count)===1?'Вставьте ключ или блок данных целиком':'Один ключ на каждую единицу товара'});
     codes.label.append(el('small','hint',Number(item.count)===1?'Многострочный блок будет отправлен как один товар.':`Нужно ключей: ${item.count}.`));
-    const expires=new Date();expires.setFullYear(expires.getFullYear()+10);
-    const until=field('Активировать до','input',{type:'date',required:true,min:day(),value:day(expires)});until.label.append(el('small','hint','Для бессрочного ключа оставьте предложенную дату.'));
+    const expires=new Date();expires.setDate(expires.getDate()+7);
+    const until=field('Активировать до','input',{type:'date',required:true,min:day(),value:day(expires)});until.label.append(el('small','hint','По умолчанию — 7 дней от сегодняшней даты.'));
     grid.append(codes.label,until.label);const slip=field('Инструкция покупателю','textarea',{rows:3,required:true,maxLength:10000,placeholder:'Где и как использовать товар'});group.append(grid,slip.label);form.append(group);inputs.push({item,codes:codes.input,until:until.input,slip:slip.input});
   }
   const confirm=field('','input',{type:'checkbox',required:true});confirm.label.className='check';confirm.label.append(document.createTextNode('Я проверил данные и готов отправить их покупателю.'));form.append(confirm.label);

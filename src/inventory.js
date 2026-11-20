@@ -4,6 +4,9 @@ export class StoreError extends Error {
   constructor(message, status=400) { super(message); this.status=status; }
 }
 const now=()=>new Date().toISOString();
+export function rollingActivationDate(days,at=Date.now()){
+  return new Date(at+(Number(days)*24+5)*3600000).toISOString().slice(0,10);
+}
 const uid=()=>crypto.randomUUID();
 const b64=bytes=>btoa(String.fromCharCode(...bytes));
 const bytes=text=>Uint8Array.from(atob(text),c=>c.charCodeAt(0));
@@ -49,17 +52,19 @@ export class Inventory {
   q(sql,...args){return this.db.prepare(sql).bind(...args);}
   async key(){return this._key ||= await cipherKey(this.env);}
   async audit(id,action){return this.q('INSERT INTO audit(entity_id,action,created_at) VALUES(?,?,?)',id,action,now()).run();}
+  activationDate(fallback){const days=Number(this.env.ACTIVATION_WINDOW_DAYS);return Number.isInteger(days)&&days>0&&days<=365?rollingActivationDate(days):fallback;}
+  activationCategory(category){return {...category,activate_till:this.activationDate(category.activate_till),activation_window_days:this.env.ACTIVATION_WINDOW_DAYS?Number(this.env.ACTIVATION_WINDOW_DAYS):null};}
   async categories(){await this.loadSupplierConfigs();return (await this.q(`SELECT c.*, SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END) AS available,
     SUM(CASE WHEN i.status='reserved' THEN 1 ELSE 0 END) AS reserved,
     SUM(CASE WHEN i.status='sold' THEN 1 ELSE 0 END) AS sold,
     SUM(CASE WHEN i.status='blocked' THEN 1 ELSE 0 END) AS blocked
-    FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results.map(c=>({...c,...this._supplier(c.id)}));}
+    FROM categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id ORDER BY c.name`).all()).results.map(c=>this.activationCategory({...c,...this._supplier(c.id)}));}
   _supplierValue=new Map();
   _supplier(id){return this._supplierValue.get(id)||{supplier_enabled:false,supplier_provider:'mke',supplier_product_id:null,reusable:false,supplier_kind:null,supplier_slip:'',delivery_priority:'pool_first',stock_sync:{...STOCK_DEFAULTS}};}
   async loadSupplierConfigs(){const rows=(await this.q("SELECT name,value FROM jobs WHERE name LIKE 'supplier:%'").all()).results;this._supplierValue.clear();for(const row of rows){try{const value=JSON.parse(row.value);this._supplierValue.set(row.name.slice(9),{supplier_enabled:value.enabled===true,supplier_provider:value.provider||'mke',supplier_product_id:value.productId||null,reusable:value.reusable===true,supplier_kind:value.supplierKind||null,supplier_slip:value.supplierSlip||'',delivery_priority:value.deliveryPriority||'pool_first',stock_sync:stockConfig(value.stockSync||{})});}catch{}}}
-  async categoryByOffer(offer){await this.loadSupplierConfigs();const row=await this.q('SELECT * FROM categories WHERE offer_id=?',offer).first();return row?{...row,...this._supplier(row.id)}:null;}
+  async categoryByOffer(offer){await this.loadSupplierConfigs();const row=await this.q('SELECT * FROM categories WHERE offer_id=?',offer).first();return row?this.activationCategory({...row,...this._supplier(row.id)}):null;}
   async saveCategory(input){
-    const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(input.activateTill,'Срок активации',10,true),kind=input.kind||'account';
+    const id=input.id||uid(),name=text(input.name,'Категория',150,true),offer=text(input.offerId,'Артикул Маркета',300,true),slip=text(input.slip,'Инструкция',10000,true),until=text(this.activationDate(input.activateTill),'Срок активации',10,true),kind=input.kind||'account';
     if(!['account','code'].includes(kind))throw new StoreError('Выберите тип товара: аккаунт или CDK.');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(until)||!Number.isFinite(Date.parse(until))||new Date(until).toISOString().slice(0,10)!==until)throw new StoreError('Проверьте срок активации.');
     if(until<now().slice(0,10))throw new StoreError('Срок активации уже истёк. Укажите будущую дату, иначе выдача будет заблокирована.');

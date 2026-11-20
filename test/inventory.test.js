@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {localDB} from '../src/local-db.js';
-import {Inventory,seal,unseal,kopecks} from '../src/inventory.js';
+import {Inventory,seal,unseal,kopecks,rollingActivationDate} from '../src/inventory.js';
 import {handleApi} from '../src/api.js';
 import {runAutomation} from '../src/automation.js';
 import {sheetRows} from '../src/sheets.js';
@@ -14,6 +14,16 @@ async function setup(){
   async function api(path,input){const response=await handleApi(new Request('https://example.test'+path,{method:input===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-App-Request':'digital-goods','X-App-Password':env.APP_PASSWORD},body:input===undefined?undefined:JSON.stringify(input)}),env,mock.fetcher);return {status:response.status,data:await response.json()};}
   return {env,store,mock,category,api};
 }
+test('rolling activation window uses Yekaterinburg date and overrides expired category dates',async()=>{
+  assert.equal(rollingActivationDate(7,Date.parse('2026-11-20T10:00:00Z')),'2026-11-27');
+  assert.equal(rollingActivationDate(7,Date.parse('2026-11-30T20:00:00Z')),'2026-12-08');
+  const {env,store,mock,category}=await setup();env.ACTIVATION_WINDOW_DAYS='7';
+  await store.q('UPDATE categories SET activate_till=? WHERE id=?','2020-01-01',category.id).run();
+  const expected=rollingActivationDate(7);
+  assert.equal((await store.categories())[0].activate_till,expected);
+  assert.equal((await store.categoryByOffer('DIGITAL-84729105')).activate_till,expected);
+  assert.equal((await store.prepare(mock.orders[0])).items[0].activate_till,expected);env.DB.close();
+});
 test('manual data can replace a rejected delivery but never an uncertain delivery',async()=>{
   const {env,store,mock,api}=await setup(),orderId=84729105;
   await store.prepare(mock.orders[0]);await store.outcome(orderId,'rejected');

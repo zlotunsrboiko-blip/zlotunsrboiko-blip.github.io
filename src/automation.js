@@ -41,7 +41,7 @@ export async function runAutomation(env,fetcher=fetch){
       }
       for(const {item,quantity,category} of plans){
         const bought=await procure(store,env,{orderId:String(order.id??order.orderId),itemId:item.id,category,quantity},fetcher);
-        external.push({id:item.id,codes:bought.codes,secrets:bought.secrets,slip:bought.slip||category.supplier_slip||category.slip,activate_till:bought.activateTill||category.activate_till});
+        external.push({id:item.id,codes:bought.codes,secrets:bought.secrets,slip:bought.slip||category.supplier_slip||category.slip,activate_till:store.activationDate(bought.activateTill||category.activate_till)});
       }
       return store.prepare(order,external.length?external:null);
     }

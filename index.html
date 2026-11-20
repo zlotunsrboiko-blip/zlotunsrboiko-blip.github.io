@@ -137,8 +137,8 @@ function buildOrder(order) {
     group.append(el('p','hint',`${item.count} шт. · Артикул: ${item.offerId||'не указан'} · ID ${item.id}`));
     const grid=el('div','fields'),codes=field(Number(item.count)===1?'Ключ или данные для покупателя':'Ключи — по одному на строку','textarea',{rows:4,required:true,spellcheck:false,placeholder:Number(item.count)===1?'Вставьте ключ или блок данных целиком':'Один ключ на каждую единицу товара'});
     codes.label.append(el('small','hint',Number(item.count)===1?'Многострочный блок будет отправлен как один товар.':`Нужно ключей: ${item.count}.`));
-    const expires=new Date();expires.setFullYear(expires.getFullYear()+10);
-    const until=field('Активировать до','input',{type:'date',required:true,min:day(),value:day(expires)});until.label.append(el('small','hint','Для бессрочного ключа оставьте предложенную дату.'));
+    const expires=new Date();expires.setDate(expires.getDate()+7);
+    const until=field('Активировать до','input',{type:'date',required:true,min:day(),value:day(expires)});until.label.append(el('small','hint','По умолчанию — 7 дней от сегодняшней даты.'));
     grid.append(codes.label,until.label);const slip=field('Инструкция покупателю','textarea',{rows:3,required:true,maxLength:10000,placeholder:'Где и как использовать товар'});group.append(grid,slip.label);form.append(group);inputs.push({item,codes:codes.input,until:until.input,slip:slip.input});
   }
   const confirm=field('','input',{type:'checkbox',required:true});confirm.label.className='check';confirm.label.append(document.createTextNode('Я проверил данные и готов отправить их покупателю.'));form.append(confirm.label);
@@ -331,6 +331,7 @@ function submitForm(root,fields,action,title='Сохранить'){
 function categoryEditor(current={}){
   const d=dialog(current.id?'Редактировать категорию':'Новая категория');
   const name=field('Название категории','input',{required:true,value:current.name||'',maxLength:150}),kind=field('Формат своего пула','select',{required:true}),mode=field('Режим товара','select'),sku=field('Артикул Маркета','input',{required:true,value:current.offer_id||'',maxLength:300}),slip=field('Инструкция для товара из своего пула','textarea',{required:true,rows:4,value:current.slip||'',maxLength:10000}),until=field('Крайняя дата активации','input',{type:'date',required:true,value:current.activate_till||'',min:todayForPool()}),shop=field('Магазин для автозакупки','select'),supplier=field('Товар выбранного магазина','select');
+  if(current.activation_window_days){until.input.readOnly=true;until.label.append(el('small','hint',`Обновляется автоматически: ${current.activation_window_days} дней от даты выдачи. Сейчас показана дата для выдачи сегодня.`));}
   const supplierKind=field('Формат товара из магазина','select'),supplierSlip=field('Инструкция для товара из магазина','textarea',{rows:4,value:current.supplier_slip||'',maxLength:10000,placeholder:'Если оставить пустым — используется инструкция своего пула'}),priority=field('Приоритет выдачи','select');
   supplierKind.input.append(new Option('Аккаунт: логин, пароль и 2FA','account'),new Option('Код / CDK','code'));supplierKind.input.value=current.supplier_kind||current.item_kind||'account';
   priority.input.append(new Option('Свой пул → магазин','pool_first'),new Option('Магазин → свой пул','supplier_first'));priority.input.value=current.delivery_priority||'pool_first';
